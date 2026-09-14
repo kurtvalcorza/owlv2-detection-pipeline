@@ -7,7 +7,7 @@ date_published: "2023-10-13"
 date_published_source: "Hugging Face Hub repository creation date of the exact hosted checkpoint (`createdAt` 2023-10-13T09:27:09Z, https://huggingface.co/api/models/google/owlv2-base-patch16-ensemble — the Transformers-format conversion); the OWLv2 paper is arXiv:2306.09683 (2023-06) and the pinned revision is the Hub's `main` as of 2026-09-14"
 ---
 
-# OWLv2 base/16 ensemble (DIMER package v0.1.0) — Open-Vocabulary Object Detection (Inference)
+# OWLv2 base/16 ensemble — Open-Vocabulary Object Detection (Inference)
 
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-google%2Fowlv2--base--patch16--ensemble-ffcc4d?style=flat)](https://huggingface.co/google/owlv2-base-patch16-ensemble)
 [![Upstream GitHub](https://img.shields.io/badge/Upstream%20GitHub-google--research%2Fscenic%20(owl__vit)-181717?style=flat&logo=github&logoColor=white)](https://github.com/google-research/scenic/tree/main/scenic/projects/owl_vit)
