@@ -2,6 +2,7 @@
 license: apache-2.0
 model_card_spec: "1.1"
 pipeline_tag: zero-shot-object-detection
+task: "Others - Open-Vocabulary Object Detection"
 base_model: google/owlv2-base-patch16-ensemble
 date_published: "2023-10-13"
 date_published_source: "Hugging Face Hub repository creation date of the exact hosted checkpoint (`createdAt` 2023-10-13T09:27:09Z, https://huggingface.co/api/models/google/owlv2-base-patch16-ensemble — the Transformers-format conversion); the OWLv2 paper is arXiv:2306.09683 (2023-06) and the pinned revision is the Hub's `main` as of 2026-09-14"
