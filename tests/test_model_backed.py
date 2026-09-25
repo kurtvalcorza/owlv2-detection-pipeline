@@ -40,8 +40,10 @@ def _record(i, size=(320, 240)):
     draw = ImageDraw.Draw(image)
     boxes = []
     for slot, kind in enumerate((i + s) % len(SHAPES) for s in (0, 1)):
-        x, y = int(rng.integers(8, 120)) + slot * 160, int(rng.integers(8, 120))
         side = int(rng.integers(60, 100))
+        # Each shape stays inside its own half of the image, so no box crosses the border or the other shape.
+        x = int(rng.integers(8, size[0] // 2 - side - 4)) + slot * (size[0] // 2)
+        y = int(rng.integers(8, size[1] - side - 4))
         if kind == 0:
             draw.rectangle((x, y, x + side, y + side), fill=SHAPES[0][1])
         elif kind == 1:
