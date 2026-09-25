@@ -1,21 +1,27 @@
 """Open-vocabulary (text-prompted) object detection with the pinned ``google/owlv2-base-patch16-ensemble``
-checkpoint (OWLv2).
+checkpoint (OWLv2), plus the adaptation contract for labelled (image, phrases, boxes) records: corpus evaluation
+(per-phrase AP at an IoU threshold, precision and recall at a score threshold), bounded fine-tuning of the class
+and box heads on cached image features with the DETR-style matched loss, and a verified adapter artifact.
 
 The class loads the processor and model only from a digest-verified local snapshot (``weights/<key>/``)
 or, when explicitly allowed, from the Hugging Face Hub at the pinned revision — always with
 ``trust_remote_code=False``: the OWLv2 architecture comes from the pinned ``transformers`` release, the
 weights are SafeTensors, and no model-repository code is executed.
 """
+# ruff: noqa: E501  -- adaptation-contract lines are kept at the fleet width
 
 from __future__ import annotations
 
 import hashlib
 import json
+import random
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 MODEL_ID = "google/owlv2-base-patch16-ensemble"
@@ -40,6 +46,30 @@ MIN_IMAGE_SIDE = 16
 MAX_PROMPTS = 16
 MAX_PROMPT_CHARS = 48
 MAX_TEXT_TOKENS = 16
+
+# Adaptation contract. The trainable part is what the upstream authors trained on top of the CLIP towers for
+# detection: the text-conditioned class head (dense projection + logit shift and scale) and the box head (a
+# three-layer MLP with the per-patch box bias). The image tower, the text tower, the post-merge layer norm and
+# the (unused at inference) objectness head stay frozen, so the image features can be cached once per record.
+WEIGHTS_FILE = "model.safetensors"
+PARAMETER_COUNT = 154_966_792
+HEAD_PARAMETERS = 1_579_526  # class_head 395,266 + box_head 1,184,260 (12 tensors)
+NUM_PATCHES = 3600  # 60 x 60 patch tokens = one box candidate each
+_TRAINABLE_PREFIXES = ("class_head.", "box_head.")
+ARTIFACT_FORMAT = f"org.valcorza.{MODEL_KEY}.adapter.v1"
+ARTIFACT_VERSION = 1
+ADAPTER_WEIGHTS = "adapter.safetensors"
+ADAPTER_MANIFEST = "manifest.json"
+MIN_SCORED_RECORDS = 50  # below this a scored set is labelled a small sample
+MAX_EVAL_RECORDS = 5_000
+EVAL_BATCH_SIZE = 4
+GRAD_CLIP = 1.0
+IOU_THRESHOLD = 0.5
+# DETR-style matched loss (the OWL-ViT training objective): sigmoid focal classification over every
+# (patch, query) logit, L1 and generalised IoU on the matched boxes; the same weights build the matching cost.
+LOSS_WEIGHTS = {"class": 2.0, "l1": 5.0, "giou": 2.0}
+FOCAL_ALPHA = 0.25
+FOCAL_GAMMA = 2.0
 
 
 def _sha256(path: Path) -> str:
@@ -79,6 +109,140 @@ def verify_snapshot(path: str | Path | None = None) -> dict[str, Any]:
         "files": len(manifest["files"]),
         "total_bytes": manifest.get("totalBytes"),
     }
+
+
+def _weight_digest(root: Path) -> str | None:
+    manifest_path = root / MANIFEST_NAME
+    if not manifest_path.is_file():
+        return None
+    with open(manifest_path, encoding="utf-8") as handle:
+        entries = json.load(handle).get("files", [])
+    return next((e["sha256"] for e in entries if e["path"] == WEIGHTS_FILE), None)
+
+
+def _trainable_names(model: Any) -> list[str]:
+    """The class and box head tensors; the CLIP towers, the post-merge layer norm and the objectness head stay frozen."""
+    return [name for name, _ in model.named_parameters() if name.startswith(_TRAINABLE_PREFIXES)]
+
+
+def _check_artifact_manifest(manifest: Mapping[str, Any], artifact_dir: Path, base_sha256: str) -> None:
+    """Refuse an adapter that names another base, another format or a file that does not match its digest."""
+    if manifest.get("format") != ARTIFACT_FORMAT:
+        raise ValueError(f"artifact format {manifest.get('format')!r} != {ARTIFACT_FORMAT!r}")
+    base = manifest.get("base", {})
+    if base.get("model_id") != MODEL_ID or base.get("revision") != MODEL_REVISION:
+        raise ValueError(f"artifact was trained on {base.get('model_id')}@{base.get('revision')}, not {MODEL_ID}@{MODEL_REVISION}")
+    if base.get("weight_sha256") != base_sha256:
+        raise ValueError("artifact base weight digest does not match the verified snapshot")
+    files = manifest.get("files") or []
+    if len(files) != 1 or files[0].get("path") != ADAPTER_WEIGHTS:
+        raise ValueError(f"artifact manifest must list exactly {ADAPTER_WEIGHTS}")
+    weights = artifact_dir / ADAPTER_WEIGHTS
+    if not weights.is_file():
+        raise FileNotFoundError(f"artifact weights missing: {weights}")
+    size = weights.stat().st_size
+    if size != files[0].get("bytes"):
+        raise ValueError(f"{ADAPTER_WEIGHTS}: size {size} != manifest {files[0].get('bytes')}")
+    digest = _sha256(weights)
+    if digest != files[0].get("sha256"):
+        raise ValueError(f"{ADAPTER_WEIGHTS}: sha256 {digest} != manifest {files[0].get('sha256')}")
+    names = manifest.get("tensors") or []
+    if not names or any(not str(n).startswith(_TRAINABLE_PREFIXES) for n in names):
+        raise ValueError("artifact tensors must all belong to the OWLv2 class and box heads")
+    adapter = manifest.get("adapter") or {}
+    threshold = adapter.get("threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, int | float) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("artifact manifest must record the score threshold the adapter was selected at")
+    prompts = adapter.get("prompts")
+    if not isinstance(prompts, list) or not prompts or any(not isinstance(p, str) for p in prompts):
+        raise ValueError("artifact manifest must record the phrase vocabulary the adapter was trained on")
+
+
+def hungarian(cost: np.ndarray) -> list[tuple[int, int]]:
+    """Minimum-cost assignment of every row of a rectangular cost matrix (rows <= columns) to a distinct column —
+    the shortest-augmenting-path Hungarian algorithm with numpy over the column dimension. Returns (row, column)
+    pairs. Used to match each reference box to one patch candidate before the loss is computed."""
+    cost = np.asarray(cost, dtype=np.float64)
+    if cost.ndim != 2:
+        raise ValueError("cost must be a 2-D array")
+    n, m = cost.shape
+    if n == 0:
+        return []
+    if n > m:
+        raise ValueError(f"cost has more rows ({n}) than columns ({m})")
+    if not np.all(np.isfinite(cost)):
+        raise ValueError("cost must be finite")
+    inf = float("inf")
+    u = np.zeros(n + 1)
+    v = np.zeros(m + 1)
+    p = np.zeros(m + 1, dtype=np.int64)  # p[j] = row (1-based) assigned to column j
+    way = np.zeros(m + 1, dtype=np.int64)
+    padded = np.empty((n + 1, m + 1))
+    padded[1:, 1:] = cost
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = np.full(m + 1, inf)
+        used = np.zeros(m + 1, dtype=bool)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            cur = padded[i0] - u[i0] - v
+            better = (~used) & (cur < minv)
+            minv[better] = cur[better]
+            way[better] = j0
+            candidates = np.where(~used, minv, inf)
+            j1 = int(np.argmin(candidates))
+            delta = candidates[j1]
+            u[p[used]] += delta
+            v[used] -= delta
+            minv[~used] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    return sorted((int(p[j]) - 1, j - 1) for j in range(1, m + 1) if p[j] != 0)
+
+
+def _cxcywh_to_xyxy(boxes: Any) -> Any:
+    cx, cy, w, h = boxes.unbind(-1)
+    import torch
+
+    return torch.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], -1)
+
+
+def _generalized_iou(a: Any, b: Any) -> Any:
+    """Pairwise GIoU between xyxy boxes a (N, 4) and b (M, 4) -> (N, M)."""
+    import torch
+
+    area_a = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1])
+    area_b = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    lt = torch.max(a[:, None, :2], b[None, :, :2])
+    rb = torch.min(a[:, None, 2:], b[None, :, 2:])
+    wh = (rb - lt).clamp(min=0)
+    inter = wh[..., 0] * wh[..., 1]
+    union = area_a[:, None] + area_b[None, :] - inter
+    iou = inter / union.clamp(min=1e-9)
+    lt2 = torch.min(a[:, None, :2], b[None, :, :2])
+    rb2 = torch.max(a[:, None, 2:], b[None, :, 2:])
+    wh2 = (rb2 - lt2).clamp(min=0)
+    enclosing = (wh2[..., 0] * wh2[..., 1]).clamp(min=1e-9)
+    return iou - (enclosing - union) / enclosing
+
+
+def _focal_terms(logits: Any) -> tuple[Any, Any]:
+    """Per-logit sigmoid focal cost of a positive and of a negative target."""
+    import torch
+
+    prob = torch.sigmoid(logits)
+    positive = FOCAL_ALPHA * (1 - prob) ** FOCAL_GAMMA * torch.nn.functional.softplus(-logits)
+    negative = (1 - FOCAL_ALPHA) * prob**FOCAL_GAMMA * torch.nn.functional.softplus(logits)
+    return positive, negative
 
 
 def _hub_download(relative_path: str, root: Path) -> None:
@@ -314,6 +478,10 @@ class Owlv2DetectionPipeline:
 
     _runner: Callable[[Image.Image, list[str], float], list[dict[str, Any]]]
     device: str
+    _model: Any = None
+    _processor: Any = None
+    weight_sha256: str | None = None
+    adapter: dict[str, Any] | None = None
 
     @classmethod
     def from_pretrained(
@@ -343,28 +511,24 @@ class Owlv2DetectionPipeline:
             source, revision=MODEL_REVISION, trust_remote_code=False, **kwargs
         )
         model = Owlv2ForObjectDetection.from_pretrained(
-            source, revision=MODEL_REVISION, trust_remote_code=False, **kwargs
+            source, revision=MODEL_REVISION, trust_remote_code=False, dtype=torch.float32, **kwargs
         )
         model = model.to(resolved_device).eval()
+        for param in model.parameters():
+            param.requires_grad_(False)
+        weight_sha256 = _weight_digest(root) if (root / MANIFEST_NAME).is_file() else None
+        pipe = cls(None, resolved_device, model, processor, weight_sha256, None)  # type: ignore[arg-type]
 
         def runner(image: Image.Image, queries: list[str], threshold: float) -> list[dict]:
-            # One text query per phrase; the CLIP tokenizer pads/truncates each to MAX_TEXT_TOKENS.
-            inputs = processor(images=image, text=[queries], return_tensors="pt").to(resolved_device)
-            with torch.inference_mode():
-                outputs = model(**inputs)
-            # The pinned processor scales boxes by max(height, width) itself because OWLv2 pads the
-            # image to a square before resizing; passing the original size is the documented contract.
-            result = processor.post_process_grounded_object_detection(
-                outputs, threshold=threshold, target_sizes=[image.size[::-1]], text_labels=[queries]
-            )[0]
-            return [
-                {"box": [float(v) for v in box.tolist()], "label": str(label), "score": float(score)}
-                for box, label, score in zip(
-                    result["boxes"], result["text_labels"], result["scores"], strict=True
-                )
-            ]
+            return pipe.detect_batch([image], queries, threshold=threshold, batch_size=1)[0]
 
-        return cls(runner, resolved_device)
+        pipe._runner = runner
+        return pipe
+
+    def _require_model(self) -> tuple[Any, Any]:
+        if self._model is None or self._processor is None:
+            raise RuntimeError("this pipeline has no loaded model (injected runner); use from_pretrained")
+        return self._model, self._processor
 
     def detect(
         self,
@@ -392,3 +556,426 @@ class Owlv2DetectionPipeline:
             "model_id": MODEL_ID,
             "model_revision": MODEL_REVISION,
         }
+
+    # ------------------------------------------------------------------------------------------------------
+    # Adaptation contract: batched detection, corpus evaluation, bounded fine-tuning of the heads, artifacts
+    # ------------------------------------------------------------------------------------------------------
+
+    def _encode_images(self, images: Sequence[Image.Image]) -> Any:
+        """The frozen image tower on a batch: the post-merge feature map (B, 60, 60, 768) in float32 on the device."""
+        model, processor = self._require_model()
+        import torch
+
+        pixel_values = processor.image_processor(images=list(images), return_tensors="pt")["pixel_values"].to(self.device)
+        with torch.no_grad():
+            feature_map, _vision = model.image_embedder(pixel_values=pixel_values)
+        return feature_map
+
+    def _encode_queries(self, queries: Sequence[str]) -> Any:
+        """The frozen text tower on the phrase vocabulary: (Q, 512) query embeddings on the device."""
+        model, processor = self._require_model()
+        import torch
+
+        tokens = processor.tokenizer(list(queries), padding="max_length", max_length=MAX_TEXT_TOKENS, truncation=True, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            return model.owlv2.get_text_features(input_ids=tokens["input_ids"], attention_mask=tokens["attention_mask"])
+
+    def _heads(self, feature_map: Any, query_embeds: Any) -> tuple[Any, Any]:
+        """The class and box heads on (cached) image features: exactly what `Owlv2ForObjectDetection.forward`
+        computes after its frozen steps (parity asserted by the model-backed tests). Returns the (B, 3600, Q)
+        logits and the (B, 3600, 4) boxes as cx, cy, w, h fractions of the padded square."""
+        model, _ = self._require_model()
+        import torch
+
+        feature_map = feature_map.to(self.device, torch.float32)
+        b, h, w, d = feature_map.shape
+        image_feats = feature_map.reshape(b, h * w, d)
+        queries = query_embeds.to(self.device, torch.float32).unsqueeze(0).expand(b, -1, -1)
+        mask = torch.ones(b, queries.shape[1], dtype=torch.bool, device=self.device)
+        logits, _class_embeds = model.class_predictor(image_feats, queries, mask)
+        boxes = model.box_predictor(image_feats, feature_map)
+        return logits, boxes
+
+    @staticmethod
+    def _postprocess(logits: Any, boxes: Any, queries: Sequence[str], sizes: Sequence[tuple[int, int]], threshold: float) -> list[list[dict[str, Any]]]:
+        """The pinned processor's `post_process_grounded_object_detection` for the text path: the best query per
+        patch, its sigmoid as the score, boxes scaled by max(width, height) because the image was padded to a
+        square (parity with the processor asserted by the model-backed tests)."""
+        import torch
+
+        scores, labels = torch.sigmoid(logits).max(-1)
+        xyxy = _cxcywh_to_xyxy(boxes)
+        out = []
+        for k, (width, height) in enumerate(sizes):
+            keep = scores[k] >= threshold
+            scale = float(max(width, height))
+            boxes_k = (xyxy[k][keep] * scale).cpu().tolist()
+            out.append([
+                {"box": [float(v) for v in box], "label": str(queries[int(label)]), "score": float(score)}
+                for box, label, score in zip(boxes_k, labels[k][keep].tolist(), scores[k][keep].tolist(), strict=True)
+            ])
+        return out
+
+    def detect_batch(
+        self,
+        images: Sequence[Image.Image],
+        prompts: Sequence[str],
+        *,
+        threshold: float = DETECTION_THRESHOLD,
+        batch_size: int = EVAL_BATCH_SIZE,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> list[list[dict[str, Any]]]:
+        """Detect the same phrases in many images, `batch_size` images per forward; one list of ``{box, label,
+        score}`` (score-descending) per image, in order. With an injected runner the images go one by one through it."""
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= 64:
+            raise ValueError("batch_size must be an int in 1..64")
+        checked = [_check_inputs(image, prompts, threshold) for image in images]
+        cut = _check_threshold("threshold", threshold)
+        queries = checked[0][1] if checked else format_prompts(prompts)
+        out: list[list[dict[str, Any]]] = []
+        if self._model is None:
+            for rgb, q, _ in checked:
+                out.append(sorted(self._runner(rgb, q, cut), key=lambda d: -d["score"]))
+                if progress is not None:
+                    progress(len(out), len(checked))
+            return out
+        query_embeds = self._encode_queries(queries)
+        for start in range(0, len(checked), batch_size):
+            batch = [rgb for rgb, _, _ in checked[start : start + batch_size]]
+            logits, boxes = self._heads(self._encode_images(batch), query_embeds)
+            for dets in self._postprocess(logits.detach(), boxes.detach(), queries, [im.size for im in batch], cut):
+                if len(dets) > MAX_DETECTIONS:
+                    raise RuntimeError(f"backend returned {len(dets)} detections > MAX_DETECTIONS {MAX_DETECTIONS}")
+                out.append(sorted(dets, key=lambda d: -d["score"]))
+            if progress is not None:
+                progress(len(out), len(checked))
+        return out
+
+    def evaluate(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        prompts: Sequence[str] | None = None,
+        threshold: float = DETECTION_THRESHOLD,
+        iou_threshold: float = IOU_THRESHOLD,
+        batch_size: int = EVAL_BATCH_SIZE,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Detect the phrase vocabulary (`prompts`, default: every phrase the records use) in every validated record
+        and score the detections above `threshold` against the record boxes with ``metrics.detection_metrics``
+        (per-phrase AP at `iou_threshold`, their mean, precision, recall and F1). Works with an injected runner too."""
+        from .metrics import detection_metrics
+        from .samples import validate_dataset
+
+        manifest = validate_dataset(records, min_records=1, max_records=MAX_EVAL_RECORDS)
+        checked = manifest["records"]
+        vocabulary = format_prompts(list(prompts) if prompts is not None else manifest["prompts"])
+        missing = sorted(set(manifest["prompts"]) - set(vocabulary))
+        if missing:
+            raise ValueError(f"records use phrases outside the evaluated vocabulary: {missing}")
+        started = time.perf_counter()
+        predictions = self.detect_batch([r["image"] for r in checked], vocabulary, threshold=threshold, batch_size=batch_size, progress=progress)
+        metrics = detection_metrics(predictions, checked, iou_threshold=iou_threshold)
+        metrics.update(
+            {
+                "threshold": float(threshold),
+                "prompts": vocabulary,
+                "verdict": "measured" if len(checked) >= MIN_SCORED_RECORDS else "measured-small-sample",
+                "adapted": self.adapter is not None,
+                "seconds": round(time.perf_counter() - started, 3),
+                "model_id": MODEL_ID,
+                "model_revision": MODEL_REVISION,
+            }
+        )
+        return metrics
+
+    def _cache(self, records: Sequence[Mapping[str, Any]], batch_size: int, progress: Callable[[int, int], None] | None = None) -> Any:
+        """Run the frozen image tower once per record and keep the feature maps in half precision on the host."""
+        import torch
+
+        maps = []
+        for start in range(0, len(records), batch_size):
+            batch = records[start : start + batch_size]
+            maps.append(self._encode_images([r["image"] for r in batch]).to("cpu", torch.float16))
+            if progress is not None:
+                progress(min(start + batch_size, len(records)), len(records))
+        return torch.cat(maps)
+
+    @staticmethod
+    def _targets(record: Mapping[str, Any], vocabulary: Sequence[str]) -> tuple[Any, Any]:
+        """Reference boxes as (class index, cx cy w h fractions of the padded square) — the box parametrisation the
+        head predicts (the processor pads the image to a square on the bottom/right, so both axes divide by the
+        longer side)."""
+        import torch
+
+        scale = float(max(record["image"].size))
+        index = {p: i for i, p in enumerate(vocabulary)}
+        classes = torch.tensor([index[b["prompt"]] for b in record["boxes"]], dtype=torch.long)
+        xyxy = torch.tensor([b["box"] for b in record["boxes"]], dtype=torch.float32) / scale
+        cxcywh = torch.stack([(xyxy[:, 0] + xyxy[:, 2]) / 2, (xyxy[:, 1] + xyxy[:, 3]) / 2, xyxy[:, 2] - xyxy[:, 0], xyxy[:, 3] - xyxy[:, 1]], -1)
+        return classes, cxcywh
+
+    def _matched_loss(self, logits: Any, boxes: Any, targets: Sequence[tuple[Any, Any]]) -> tuple[Any, dict[str, float]]:
+        """DETR-style loss on one batch: Hungarian matching of each reference box to one patch under the class,
+        L1 and GIoU costs, then sigmoid focal loss over every (patch, query) logit (matched pairs positive), L1 and
+        GIoU on the matched boxes, all normalised by the number of reference boxes in the batch."""
+        import torch
+
+        device = logits.device
+        n_boxes = max(1, sum(len(c) for c, _ in targets))
+        class_target = torch.zeros_like(logits)
+        l1_total = torch.zeros((), device=device)
+        giou_total = torch.zeros((), device=device)
+        for k, (classes, gt) in enumerate(targets):
+            if len(classes) == 0:
+                continue
+            classes, gt = classes.to(device), gt.to(device)
+            with torch.no_grad():
+                positive, negative = _focal_terms(logits[k].detach())
+                class_cost = (positive - negative)[:, classes].transpose(0, 1)  # (n_gt, patches)
+                l1_cost = torch.cdist(gt, boxes[k].detach(), p=1)
+                giou_cost = -_generalized_iou(_cxcywh_to_xyxy(gt), _cxcywh_to_xyxy(boxes[k].detach()))
+                cost = LOSS_WEIGHTS["class"] * class_cost + LOSS_WEIGHTS["l1"] * l1_cost + LOSS_WEIGHTS["giou"] * giou_cost
+            pairs = hungarian(cost.cpu().numpy())
+            rows = torch.tensor([r for r, _ in pairs], device=device)
+            cols = torch.tensor([c for _, c in pairs], device=device)
+            class_target[k, cols, classes[rows]] = 1.0
+            matched = boxes[k][cols]
+            l1_total = l1_total + (matched - gt[rows]).abs().sum()
+            giou_total = giou_total + (1 - torch.diagonal(_generalized_iou(_cxcywh_to_xyxy(matched), _cxcywh_to_xyxy(gt[rows])))).sum()
+        positive, negative = _focal_terms(logits)
+        focal = (class_target * positive + (1 - class_target) * negative).sum() / n_boxes
+        l1 = l1_total / n_boxes
+        giou = giou_total / n_boxes
+        total = LOSS_WEIGHTS["class"] * focal + LOSS_WEIGHTS["l1"] * l1 + LOSS_WEIGHTS["giou"] * giou
+        return total, {"focal": float(focal), "l1": float(l1), "giou": float(giou)}
+
+    def adapt(
+        self,
+        train: Sequence[Mapping[str, Any]],
+        val: Sequence[Mapping[str, Any]] | None,
+        *,
+        prompts: Sequence[str] | None = None,
+        epochs: int = 8,
+        lr: float = 1e-4,
+        batch_size: int = 8,
+        seed: int = 0,
+        threshold: float = DETECTION_THRESHOLD,
+        iou_threshold: float = IOU_THRESHOLD,
+        progress: Callable[[Mapping[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Bounded fine-tuning of the OWLv2 class and box heads on labelled (image, phrases, boxes) records with the
+        DETR-style matched loss the upstream detection heads were trained with (Hungarian matching; sigmoid focal
+        classification, L1 and GIoU box terms). The frozen image tower is run once per record under no gradient and
+        its feature maps cached (half precision on the host), the frozen text tower once per phrase, so each step
+        runs only the heads; the logits equal the full model's. AdamW (no weight decay), gradient clipping at
+        `GRAD_CLIP`, seeded shuffling, no scheduler, no augmentation. Epoch 0 records the frozen model's validation
+        rates at `threshold`; the epoch with the highest validation mAP@`iou_threshold` (the earliest on ties) is
+        kept. On any exception the frozen heads are restored."""
+        from .metrics import detection_metrics
+        from .samples import validate_dataset
+
+        if isinstance(epochs, bool) or not isinstance(epochs, int) or not 1 <= epochs <= 100:
+            raise ValueError("epochs must be an int in 1..100")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= 128:
+            raise ValueError("batch_size must be an int in 1..128")
+        if not isinstance(lr, int | float) or isinstance(lr, bool) or not 0 < lr <= 1e-2:
+            raise ValueError("lr must be a number in (0, 1e-2]")
+        cut = _check_threshold("threshold", threshold)
+        if not 0.0 < iou_threshold <= 1.0:
+            raise ValueError("iou_threshold must be in (0, 1]")
+        train_manifest = validate_dataset(train)
+        train_checked = train_manifest["records"]
+        val_manifest = validate_dataset(val, min_records=1) if val is not None else None
+        val_checked = val_manifest["records"] if val_manifest is not None else None
+        vocabulary = format_prompts(list(prompts) if prompts is not None else train_manifest["prompts"])
+        used = set(train_manifest["prompts"]) | (set(val_manifest["prompts"]) if val_manifest is not None else set())
+        missing = sorted(used - set(vocabulary))
+        if missing:
+            raise ValueError(f"records use phrases outside the training vocabulary: {missing}")
+        model, _processor = self._require_model()
+        import torch
+
+        started = time.perf_counter()
+        names = _trainable_names(model)
+        params = {name: param for name, param in model.named_parameters() if name in set(names)}
+        n_trainable = sum(p.numel() for p in params.values())
+        backup = {name: param.detach().clone() for name, param in params.items()}
+        previous_adapter = self.adapter
+        cudnn_flags = torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark
+        torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
+        try:
+            model.eval()
+            query_embeds = self._encode_queries(vocabulary)
+            cache = self._cache(train_checked, EVAL_BATCH_SIZE)
+            cached_val = self._cache(val_checked, EVAL_BATCH_SIZE) if val_checked is not None else None
+            cache_seconds = round(time.perf_counter() - started, 3)
+            targets = [self._targets(r, vocabulary) for r in train_checked]
+
+            def score_val() -> dict[str, Any] | None:
+                if val_checked is None or cached_val is None:
+                    return None
+                predictions = []
+                with torch.no_grad():
+                    for start in range(0, len(val_checked), EVAL_BATCH_SIZE):
+                        logits, boxes = self._heads(cached_val[start : start + EVAL_BATCH_SIZE], query_embeds)
+                        predictions.extend(self._postprocess(logits, boxes, vocabulary, [r["image"].size for r in val_checked[start : start + EVAL_BATCH_SIZE]], cut))
+                m = detection_metrics(predictions, val_checked, iou_threshold=iou_threshold)
+                return {k: m[k] for k in ("map50", "precision", "recall", "f1", "n", "n_predicted_boxes")}
+
+            for name, param in model.named_parameters():
+                param.requires_grad_(name in params)
+            history: list[dict[str, Any]] = [{"epoch": 0, "train_loss": None, "val": score_val(), "note": "frozen model"}]
+            if progress is not None:
+                progress(history[-1])
+            best_epoch, best_score = 0, (history[0]["val"] or {}).get("map50", -1.0)
+            best_state = {name: param.detach().clone() for name, param in params.items()}
+            optimizer = torch.optim.AdamW(list(params.values()), lr=lr, weight_decay=0.0)
+            rng = random.Random(seed)
+            torch.manual_seed(seed)
+            order = list(range(len(train_checked)))
+            for epoch in range(1, epochs + 1):
+                rng.shuffle(order)
+                model.class_head.train()
+                model.box_head.train()
+                total, steps, parts = 0.0, 0, {"focal": 0.0, "l1": 0.0, "giou": 0.0}
+                for start in range(0, len(order), batch_size):
+                    idx = order[start : start + batch_size]
+                    optimizer.zero_grad(set_to_none=True)
+                    logits, boxes = self._heads(cache[idx], query_embeds)
+                    loss, terms = self._matched_loss(logits, boxes, [targets[i] for i in idx])
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(list(params.values()), GRAD_CLIP)
+                    optimizer.step()
+                    total += float(loss.detach())
+                    for key in parts:
+                        parts[key] += terms[key]
+                    steps += 1
+                model.eval()
+                entry = {"epoch": epoch, "train_loss": round(total / max(steps, 1), 5), "loss_terms": {k: round(v / max(steps, 1), 5) for k, v in parts.items()}, "val": score_val()}
+                history.append(entry)
+                if progress is not None:
+                    progress(entry)
+                score = (entry["val"] or {}).get("map50")
+                if val_checked is None or (score is not None and score > best_score):
+                    best_epoch, best_score = epoch, score if score is not None else best_score
+                    best_state = {name: param.detach().clone() for name, param in params.items()}
+            with torch.no_grad():
+                for name, param in params.items():
+                    param.copy_(best_state[name])
+        except BaseException:
+            with torch.no_grad():
+                for name, param in params.items():
+                    param.copy_(backup[name])
+            model.eval()
+            self.adapter = previous_adapter
+            raise
+        finally:
+            for param in model.parameters():
+                param.requires_grad_(False)
+            model.eval()
+            torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = cudnn_flags
+        self.adapter = {
+            "threshold": cut,
+            "iou_threshold": float(iou_threshold),
+            "prompts": list(vocabulary),
+            "trainable_names": names,
+            "n_trainable": n_trainable,
+            "n_total": sum(p.numel() for p in model.parameters()),
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "best_epoch": best_epoch,
+            "selection": "highest validation mAP at the IoU threshold" if val_checked is not None else "final epoch (no validation split)",
+            "loss": f"Hungarian-matched sigmoid focal (alpha {FOCAL_ALPHA}, gamma {FOCAL_GAMMA}) + L1 + GIoU with weights {LOSS_WEIGHTS}, normalised by the reference-box count; computed on cached image features",
+            "lr": float(lr),
+            "seed": seed,
+            "n_train": len(train_checked),
+            "n_val": len(val_checked) if val_checked is not None else 0,
+            "cache_seconds": cache_seconds,
+            "history": history,
+            "seconds": round(time.perf_counter() - started, 3),
+        }
+        return dict(self.adapter)
+
+    def save_artifact(self, output_dir: str | Path, metadata: Mapping[str, Any] | None = None) -> Path:
+        """Write the trained tensors as safetensors plus a manifest naming the base, the digests, the threshold, the
+        phrase vocabulary and the training configuration. Requires a prior `adapt`."""
+        model, _processor = self._require_model()  # refuse before importing torch
+        import torch
+        from safetensors.torch import save_file
+
+        if self.adapter is None:
+            raise RuntimeError("nothing to save: call adapt() first")
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        names = list(self.adapter["trainable_names"])
+        state = model.state_dict()
+        tensors = {name: state[name].detach().cpu().contiguous() for name in names}
+        weights = out / ADAPTER_WEIGHTS
+        save_file(tensors, str(weights), metadata={"format": "pt"})
+        manifest = {
+            "format": ARTIFACT_FORMAT,
+            "version": ARTIFACT_VERSION,
+            "base": {"model_id": MODEL_ID, "revision": MODEL_REVISION, "weight_file": WEIGHTS_FILE, "weight_sha256": self.weight_sha256},
+            "adapter": {k: v for k, v in self.adapter.items() if k not in ("history", "trainable_names")},
+            "history": self.adapter["history"],
+            "tensors": names,
+            "files": [{"path": ADAPTER_WEIGHTS, "bytes": weights.stat().st_size, "sha256": _sha256(weights)}],
+            "torch": torch.__version__,
+            "metadata": dict(metadata or {}),
+        }
+        with open(out / ADAPTER_MANIFEST, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, ensure_ascii=False)
+        return out
+
+    def load_artifact(self, artifact_dir: str | Path) -> dict[str, Any]:
+        """Overlay a saved adapter onto this (freshly loaded) pipeline after checking its manifest, digest and exact
+        tensor set. Refuses tensors outside the class and box heads."""
+        model, _processor = self._require_model()  # refuse before importing safetensors
+        from safetensors.torch import load_file
+
+        artifact = Path(artifact_dir)
+        manifest_path = artifact / ADAPTER_MANIFEST
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"artifact manifest missing: {manifest_path}")
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        _check_artifact_manifest(manifest, artifact, self.weight_sha256 or "")
+        expected = _trainable_names(model)
+        if sorted(manifest["tensors"]) != sorted(expected):
+            raise ValueError("artifact tensor set does not match its recorded configuration")
+        tensors = load_file(str(artifact / ADAPTER_WEIGHTS))
+        if sorted(tensors) != sorted(expected):
+            raise ValueError("artifact tensor names differ from the manifest")
+        state = model.state_dict()
+        for name, tensor in tensors.items():
+            if tuple(tensor.shape) != tuple(state[name].shape):
+                raise ValueError(f"artifact tensor {name} has shape {tuple(tensor.shape)}, base has {tuple(state[name].shape)}")
+        model.load_state_dict({k: v.to(state[k].device, state[k].dtype) for k, v in tensors.items()}, strict=False)
+        model.eval()
+        self.adapter = {**manifest["adapter"], "trainable_names": expected, "history": manifest.get("history", [])}
+        return dict(self.adapter)
+
+    @classmethod
+    def from_artifact(
+        cls,
+        artifact_dir: str | Path,
+        *,
+        device: str | None = None,
+        weights_dir: str | Path | None = None,
+        allow_download: bool = False,
+    ) -> Owlv2DetectionPipeline:
+        """Check the adapter manifest against the base snapshot's recorded weight digest, load the verified base, then
+        overlay the adapter (checked again, and the tensor set, before deserialising). A refused manifest never loads
+        a model."""
+        artifact = Path(artifact_dir)
+        manifest_path = artifact / ADAPTER_MANIFEST
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"artifact manifest missing: {manifest_path}")
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        root = Path(weights_dir) if weights_dir is not None else DEFAULT_WEIGHTS_DIR
+        _check_artifact_manifest(manifest, artifact, _weight_digest(root) or "")
+        pipe = cls.from_pretrained(device=device, weights_dir=weights_dir, allow_download=allow_download)
+        pipe.load_artifact(artifact_dir)
+        return pipe

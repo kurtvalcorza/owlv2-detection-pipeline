@@ -1,4 +1,4 @@
-"""Static release-asset validation for the OWLv2 open-vocabulary detection DIMER pipeline.
+"""Static release-asset validation for the OWLv2 base/16 ensemble open-vocabulary detection DIMER pipeline.
 
 Checks the STANDALONE tutorial notebook (DIMER Notebook Specification 2.0 §4), the tutorial
 registry, model card, README, STATUS.md and weight documentation for source conformance and
@@ -23,56 +23,99 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "owlv2_detection_pipeline"
 REPO_NAME = "owlv2-detection-pipeline"
 NOTEBOOK_NAME = "owlv2_detection_colab.ipynb"
-EXPECTED_PROFILE = "TASK-INFERENCE"
+EXPECTED_PROFILE = "E2E"
 EXPECTED_MODEL_ID = "google/owlv2-base-patch16-ensemble"
 PIPELINE_CLASS = "Owlv2DetectionPipeline"
-# Extra 40-hex commits the docs may legitimately cite (none yet).
-KNOWN_SHAS: frozenset[str] = frozenset(())
-
-# NOTEBOOK_SPEC 2.0 §10.3: BYOD is gated off by default so the sample path runs top-to-bottom.
+# INF1: the exact load expression the model cell must use (CUDA when visible, CPU otherwise).
+MODEL_LOAD_EXPR = f"{PIPELINE_CLASS}.from_pretrained(weights_dir=WEIGHTS_DIR)"
+# Additional 40-hex revisions a document may legitimately cite: the BCCD parquet-conversion revision the sample is
+# pinned to (samples.py CORPUS_REVISION).
+KNOWN_SHAS: frozenset[str] = frozenset(("22cf1b9d2367e799ab54a16774a2266e4f8ce9a9",))
+# Colab form gates that must default to the non-interactive sample path.
 BYOD_GATES = ("USE_BYOD",)
-
+# Machine-readable artifacts the notebook must write (OUT1-OUT3, OUT8, DAT24, EVAL21).
 EXPECTED_OUTPUTS = (
+    "outputs/owlv2_detection_train.csv",
+    "outputs/owlv2_detection_example_record.png",
     "outputs/owlv2_detection_input_manifest.json",
     "outputs/owlv2_detection_evaluation_report.json",
+    "outputs/owlv2_detection_examples",
+    "outputs/owlv2_detection_adapter",
     "outputs/owlv2_detection_result.json",
-    "outputs/owlv2_detection_detections.csv",
-    "outputs/owlv2_detection_annotated.png",
 )
-
+# Profile-specific code the notebook must exercise through the carried package's public API.
 CODE_MARKERS = (
-    "input_manifest = validate_inputs(image, prompts, threshold=threshold, names=[image_name])",
-    "validate_inputs(image, ['x' * (MAX_PROMPT_CHARS + 1)])",
-    "result = pipe.detect(image, prompts, threshold=threshold)",
-    "report = evaluation_report(result, drawn_boxes, sample_kind=sample_kind)",
-    "print({'ceilings': {'MIN_IMAGE_SIDE': MIN_IMAGE_SIDE, 'MAX_IMAGE_SIDE': MAX_IMAGE_SIDE, 'MAX_PROMPTS': MAX_PROMPTS, 'MAX_PROMPT_CHARS': MAX_PROMPT_CHARS, 'MAX_TEXT_TOKENS': MAX_TEXT_TOKENS, 'MAX_DETECTIONS': MAX_DETECTIONS, 'DETECTION_THRESHOLD': DETECTION_THRESHOLD}})",
-    "threshold = 0.1",
-    "drawn_boxes = {'a black rectangle': [80.0, 120.0, 280.0, 360.0], 'a red circle': [380.0, 140.0, 560.0, 320.0], 'a blue triangle': [200.0, 380.0, 360.0, 460.0]}",
-    "prompts = list(drawn_boxes)",
-    "hashlib.sha256(np.asarray(image.convert('RGB')).tobytes()).hexdigest()",
-    "result['threshold']",
-    "annotated.save('outputs/owlv2_detection_annotated.png')",
-    "writer.writerow(['image', 'rank', 'label', 'score', 'x0', 'y0', 'x1', 'y1'])",
+    "corpus_files = fetch_corpus(cache_dir='weights/bccd')",
+    "corpus = read_corpus(corpus_files)",
+    "splits = build_sample_dataset(corpus, seed=SPLIT_SEED)",
+    "records = load_byod_dataset(byod_zip)",
+    "splits = split_dataset(records, seed=SPLIT_SEED)",
+    "dataset_manifests = {name: validate_dataset(part) for name, part in splits.items()}",
+    "disjoint = check_split_disjoint(splits)",
+    "write_dataset_csv(train_records, 'outputs/owlv2_detection_train.csv')",
+    "validate_dataset(probe)",
+    "print({'ceilings': {'MIN_IMAGE_SIDE': MIN_IMAGE_SIDE, 'MAX_IMAGE_SIDE': MAX_IMAGE_SIDE, 'MAX_PROMPTS': MAX_PROMPTS, 'MAX_PROMPT_CHARS': MAX_PROMPT_CHARS, 'MAX_TEXT_TOKENS': MAX_TEXT_TOKENS, 'MAX_DETECTIONS': MAX_DETECTIONS, 'NUM_PATCHES': NUM_PATCHES, 'DETECTION_THRESHOLD': DETECTION_THRESHOLD, 'IOU_THRESHOLD': IOU_THRESHOLD, 'MIN_RECORDS': MIN_RECORDS, 'MAX_RECORDS': MAX_RECORDS, 'EVAL_BATCH_SIZE': EVAL_BATCH_SIZE",
+    "def synthetic_scene(width=640, height=480):",
+    "input_manifest = validate_inputs(scene, scene_prompts, threshold=THRESHOLD, names=[scene_name])",
+    "validate_inputs(scene, ['x' * (MAX_PROMPT_CHARS + 1)])",
+    "result = pipeline.detect(scene, scene_prompts, threshold=THRESHOLD)",
+    "report = evaluation_report(result, scene_boxes, sample_kind=",
+    "baseline_empty = empty_baseline(test_records)",
+    "baseline_grid = grid_baseline(test_records, train_records)",
+    "frozen_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
+    "adapt_result = pipe.adapt(train_records, val_records, prompts=PROMPTS, epochs=EPOCHS, lr=LEARNING_RATE, batch_size=BATCH_SIZE, threshold=THRESHOLD, progress=report)",
+    "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
+    "adapted_val = pipe.evaluate(val_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
+    "assert adapted_test['map50'] >= frozen_test['map50']",
+    "assert adapted_test['map50'] > baseline_grid['map50']",
+    "adapted_scene, adapted_scene_seconds, adapted_scene_checks, adapted_scene_report = detect_scene(pipe, 'adapted')",
+    "pipe.save_artifact(artifact_dir, metadata={'tutorial': 'owlv2_detection', 'data_source': data_source})",
+    "reloaded = Owlv2DetectionPipeline.from_artifact(artifact_dir, weights_dir=WEIGHTS_DIR, device=pipe.device)",
+    "assert parity['identical_detections'] == parity['of']",
     "'model_revision': MODEL_REVISION",
     "'model_license': MODEL_LICENSE",
+    "'weight_file': WEIGHTS_FILE, 'weight_format': 'safetensors, digest-verified', 'weight_sha256': pipe.weight_sha256",
+    "'corpus': {'name': CORPUS_NAME, 'repo': CORPUS_REPO, 'revision': CORPUS_REVISION, 'files': {k: v[0] for k, v in CORPUS_FILES.items()}, 'license': CORPUS_LICENSE, 'bytes': CORPUS_BYTES",
     "transformers.__version__",
     "'device': pipe.device",
 )
-
+# Profile-specific learner-facing statements.
 MARKDOWN_MARKERS = (
     "**Capability:** zero-shot (open-vocabulary, text-prompted) object detection",
-    "**No adaptation occurs:**",
-    "The detection threshold is a **caller-owned request parameter**",
-    "**sigmoid of the best image–text logit, not a calibrated probability**",
-    "**ordered by descending score**",
-    "**There is no non-maximum",
-    "mean average precision needs a labelled box set",
-    "the verdict is `not-measurable`",
-    "`sample-sanity`",
-    "closed-set detection with a fixed class list (see the sibling RT-DETR pipeline)",
+    "**Apache-2.0** licence",
+    "**an uncalibrated sigmoid**",
+    "**the threshold is a caller-owned request parameter**",
+    "**no non-maximum suppression**",
+    "**adaptation of the class and box heads on labelled (image, phrases, boxes) records**",
+    "**non-adapted baselines**",
+    "**mAP**",
+    "**per-phrase AP**",
+    "**precision**",
+    "**recall**",
+    "**empty** baseline",
+    "**grid-prior** baseline",
+    "**DETR-style matched loss**",
+    "**Hungarian matching**",
+    "**sigmoid focal loss**",
+    "**frozen-tower cache**",
+    "**highest validation mAP**",
+    "**no dispersion estimate**",
+    "**Snapshot note:**",
+    "**float32 on every device**",
+    "instance or semantic segmentation",
+    "## 4. BCCD records, the phrases and the split",
+    "## 5. Detect in a drawn scene through the inference contract",
+    "## 6. Baselines and the frozen model on the test records",
+    "## 7. Bounded fine-tuning of the heads",
+    "## 8. Held-out evaluation",
+    "## 9. Look at the boxes, detect in the scene again, export the adapter and reload it",
+    "**Precision and recall together:**",
+    "**Leakage:**",
+    "**Troubleshooting.**",
 )
-
-# Runtime/model-library access must stay inside the carried module (ST1/ST2).
+# Direct-library use that must stay inside the carried module cells (G2: the notebook calls the
+# pipeline API, it does not reimplement it). Checked on every code cell except the embedded ones
+# and the generator-owned install cell.
 FORBIDDEN_OUTSIDE_MODULE = (
     "from huggingface_hub import",
     "import huggingface_hub",
@@ -81,11 +124,20 @@ FORBIDDEN_OUTSIDE_MODULE = (
     "import transformers.",
     "Owlv2ForObjectDetection",
     "Owlv2Processor",
-    "post_process_grounded_object_detection(",
-    "from torchvision import",
+    "torch.sigmoid(",
     "torch.inference_mode(",
+    "torch.optim",
+    ".backward(",
+    "requires_grad",
+    "from safetensors",
+    "import safetensors",
+    "urllib.request",
+    "pyarrow",
+    "pipe._model",
+    "pipe._processor",
+    "extractall(",
 )
-
+INSTALL_CELL_MARKER = "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', *PINS], check=True)"
 # ---------------------------------------------------------------------------
 # Shared checks. Everything below is source/structure validation only. Passing
 # these checks is NOT clean-runtime execution evidence under DIMER Notebook
@@ -95,7 +147,7 @@ FORBIDDEN_OUTSIDE_MODULE = (
 NOTEBOOK_SPEC = "2.0"
 ALLOWED_PROFILES = {"E2E", "ARTIFACT-INFERENCE", "TASK-INFERENCE", "MULTI-CAPABILITY", "SMOKE"}
 STATUS_TOKENS = ("Candidate", "Release-grade")
-PLACEHOLDER = re.compile(r"\b(TODO|TBD|FIXME)\b|Insert text here|Tooltip:", re.I)
+PLACEHOLDER = re.compile(r"\b(TODO|TBD|FIXME)\b|Insert text here|Tooltip:|@P:[A-Z0-9_]+@", re.I)
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY_NAMES = ("MODEL_ID", "MODEL_REVISION", "MODEL_LICENSE", "MODEL_KEY")
 UNSUPPORTED_CLAIMS = re.compile(
@@ -156,7 +208,7 @@ COMMON_MARKDOWN_MARKERS = (
     "**Learning objectives:**",
     "## Prerequisites",
     "Do not upload confidential or restricted",
-    "- **External access:** the Hugging Face Hub only",
+    "- **External access:** the Hugging Face Hub",
     "## 1. Install the pinned runtime",
     "## 2. Pipeline code (carried verbatim from",
     "## 3. Pin, stage and verify the model",
@@ -170,14 +222,19 @@ COMMON_MARKDOWN_MARKERS = (
 # Patterns that must never appear in tutorial code (comment-stripped), in any cell.
 FORBIDDEN_PATTERNS = (
     ("credential in clone URL", re.compile(r"https://[^/'\"\s]*@github\.com/|x-access-token:")),
-    ("repository clone (ST1)", re.compile(r"\bgit\b[^\n]*\bclone\b|github\.com")),
+    ("repository clone (ST1)", re.compile(r"\bgit\b[^\n]*\bclone\b|github\.com/kurtvalcorza")),
     ("editable self-install", re.compile(r"""['"](?:-e|--editable)['"]|pip install (?:-e|--editable)\b""")),
     ("repository package import (ST1)", re.compile(rf"^\s*(?:from|import)\s+{PACKAGE}\b", re.M)),
     ("mutable model reference (MOD14)", re.compile(r"revision\s*=\s*['\"](?:main|latest)['\"]")),
     ("trust_remote_code enabled", re.compile(r"trust_remote_code\s*[=:]\s*True")),
     (
         "unsafe deserialization",
-        re.compile(r"\bpickle\.load|\btorch\.load\s*\(|getattr\(\s*torch\s*,\s*['\"]load['\"]"),
+        re.compile(
+            r"\bpickle\.load"
+            r"|\btorch\.load\s*\((?![^)]*weights_only\s*=\s*True)"
+            r"|weights_only\s*=\s*False"
+            r"|getattr\(\s*torch\s*,\s*['\"]load['\"]"
+        ),
     ),
     ("archive extractall", re.compile(r"\.extractall\s*\(")),
     ("notebook magic or shell escape", re.compile(r"(?m)^\s*[%!]|get_ipython\(\)")),
@@ -404,13 +461,16 @@ def _validate_notebook_structure(path: Path, notebook: dict) -> tuple[list[tuple
     _check(dimer.get("notebook_mode") in ("REFERENCE", "GUIDED", "WORKSHOP"), f"{path.name}: metadata.dimer.notebook_mode must declare a §3.3 pedagogical mode")
     _check(dimer.get("standalone") is True, f"{path.name}: metadata.dimer.standalone must be true (ST6)")
     generated = dimer.get("generated_from")
+    _template = _load_tool("notebook_template").TEMPLATE
     _check(isinstance(generated, dict), f"{path.name}: metadata.dimer.generated_from is required (ST5)")
     _check(generated.get("repository") == REPO_NAME, f"{path.name}: generated_from.repository must be {REPO_NAME}")
     _check(
-        generated.get("module") == f"src/{PACKAGE}/pipeline.py",
-        f"{path.name}: generated_from.module must be src/{PACKAGE}/pipeline.py",
+        generated.get("module") == f"{_template.get('package_dir', f'src/{PACKAGE}')}/{_template.get('entry_module', 'pipeline.py')}",
+        f"{path.name}: generated_from.module must name the template entry module",
     )
-    module_sha = hashlib.sha256(_read(ROOT / "src" / PACKAGE / "pipeline.py").encode("utf-8")).hexdigest()
+    _pkg_dir = ROOT / _template.get("package_dir", f"src/{PACKAGE}")
+    _order = _load_tool("build_notebook")._module_order(_pkg_dir, list(_template.get("modules", ["pipeline.py"])))
+    module_sha = hashlib.sha256("".join(_read(_pkg_dir / m) for m in _order).encode("utf-8")).hexdigest()
     _check(
         generated.get("module_sha256") == module_sha,
         f"{path.name}: generated_from.module_sha256 does not match src/ (PAR4: regenerate the notebook)",
@@ -481,38 +541,47 @@ def _validate_gates(path: Path, code_cells: list[tuple[int, str, ast.Module]]) -
                 )
 
 
-def _validate_embedded_module(path: Path, notebook: dict, build) -> int:
-    """PAR1: exactly one tagged cell, equal to the module after the documented rewrites."""
+def _validate_embedded_modules(path: Path, notebook: dict, build) -> list[int]:
+    """PAR1: one tagged cell per carried module, in dependency order, each equal to its module after
+    the documented rewrites (generator /2 multi-module carrier; ST2 applied per module)."""
     tagged = [
         (index, cell)
         for index, cell in enumerate(notebook.get("cells", []))
         if cell.get("cell_type") == "code" and cell.get("metadata", {}).get("dimer", {}).get("embedded_module")
     ]
-    _check(len(tagged) == 1, f"{path.name}: exactly one cell must be tagged metadata.dimer.embedded_module (ST2)")
-    index, cell = tagged[0]
+    template = _load_tool("notebook_template").TEMPLATE
+    recorded = notebook["metadata"]["dimer"]["generated_from"]["revision"]
+    context = build.load_context(ROOT, template, recorded)
+    expected_rels = context["module_rels"]
     _check(
-        cell["metadata"]["dimer"]["embedded_module"] == f"src/{PACKAGE}/pipeline.py",
-        f"{path.name}: embedded_module tag must name src/{PACKAGE}/pipeline.py",
+        [cell["metadata"]["dimer"]["embedded_module"] for _, cell in tagged] == expected_rels,
+        f"{path.name}: the cells tagged metadata.dimer.embedded_module must be exactly {expected_rels}, in order (ST2)",
     )
-    expected = build.apply_rewrites(_read(ROOT / "src" / PACKAGE / "pipeline.py"))
-    _check(
-        _cell_source(cell).rstrip("\n") + "\n" == expected,
-        f"{path.name}: embedded module differs from src/{PACKAGE}/pipeline.py (PAR1); regenerate the notebook",
-    )
-    return index
+    for (index, cell), module, rel in zip(
+        tagged, context["modules"], context["module_rels"], strict=True
+    ):
+        _check(
+            cell["metadata"]["dimer"].get("module_sha256") == context["per_module_sha256"][rel],
+            f"{path.name}: cell {index} module_sha256 tag does not match {rel}",
+        )
+        _check(
+            _cell_source(cell).rstrip("\n") + "\n" == context["embedded"][module],
+            f"{path.name}: embedded module cell {index} differs from {rel} (PAR1); regenerate the notebook",
+        )
+    return [index for index, _ in tagged]
 
 
 def _validate_identity(
-    path: Path, code_cells: list[tuple[int, str, ast.Module]], embedded_index: int, revision: str
+    path: Path, code_cells: list[tuple[int, str, ast.Module]], embedded: list[int], revision: str
 ) -> None:
     """Identity constants are bound in the carried module only; nothing outside rebinds them."""
     for index, _source, tree in code_cells:
-        if index == embedded_index:
+        if index in embedded:
             continue
         for node in ast.walk(tree):
             rebound = [name for name in _assignment_targets(node) if name in IDENTITY_NAMES]
             _check(not rebound, f"{path.name}: {rebound} must not be rebound outside the module cell (cell {index})")
-    outside = "\n".join(source for index, source, _ in code_cells if index != embedded_index)
+    outside = "\n".join(source for index, source, _ in code_cells if index not in embedded)
     manifest_block = re.search(r"^MANIFEST = (\{.*?^\})$", outside, re.M | re.S)
     _check(manifest_block is not None, f"{path.name}: model cell must carry an inline MANIFEST literal (ST3)")
     outside_without_manifest = outside.replace(manifest_block.group(0), "")
@@ -553,21 +622,24 @@ def _validate_bootstrap_guard(path: Path, code_cells: list[tuple[int, str, ast.M
 
 
 def _validate_notebook_content(
-    path: Path, code_cells: list[tuple[int, str, ast.Module]], markdown: str, embedded_index: int
+    path: Path, code_cells: list[tuple[int, str, ast.Module]], markdown: str, embedded: list[int]
 ) -> None:
     model_id, _revision = _package_identity()
     stripped = {index: _strip_comments(source) for index, source, _ in code_cells}
     code = "\n".join(stripped.values())
-    outside = "\n".join(text for index, text in stripped.items() if index != embedded_index)
+    outside = "\n".join(text for index, text in stripped.items() if index not in embedded)
     missing = [marker for marker in COMMON_CODE_MARKERS + CODE_MARKERS if marker not in code]
     _check(not missing, f"{path.name}: missing required source markers: {missing}")
     present = [label for label, pattern in FORBIDDEN_PATTERNS if pattern.search(code)]
     _check(not present, f"{path.name}: forbidden/insecure source: {present}")
-    leaked = [marker for marker in FORBIDDEN_OUTSIDE_MODULE if marker in outside]
+    outside_stage_cells = "\n".join(
+        text for index, text in stripped.items() if index not in embedded and INSTALL_CELL_MARKER not in text
+    )
+    leaked = [marker for marker in FORBIDDEN_OUTSIDE_MODULE if marker in outside_stage_cells]
     _check(not leaked, f"{path.name}: direct library use outside the carried module cell (G2): {leaked}")
     _check(
-        f"pipe = {PIPELINE_CLASS}.from_pretrained(weights_dir=WEIGHTS_DIR)" in outside,
-        f"{path.name}: must load through {PIPELINE_CLASS}.from_pretrained(weights_dir=WEIGHTS_DIR) (INF1)",
+        f"pipe = {MODEL_LOAD_EXPR}" in outside,
+        f"{path.name}: must load through {MODEL_LOAD_EXPR} (INF1)",
     )
     _validate_gates(path, code_cells)
     _validate_bootstrap_guard(path, code_cells)
@@ -588,11 +660,11 @@ def validate_notebooks() -> None:
     build = _load_tool("build_notebook")
     notebook = json.loads(_read(path))
     code_cells, markdown = _validate_notebook_structure(path, notebook)
-    embedded_index = _validate_embedded_module(path, notebook, build)
+    embedded = _validate_embedded_modules(path, notebook, build)
     _model_id, revision = _package_identity()
-    _validate_identity(path, code_cells, embedded_index, revision)
+    _validate_identity(path, code_cells, embedded, revision)
     _validate_parity(path, notebook, code_cells, build)
-    _validate_notebook_content(path, code_cells, markdown, embedded_index)
+    _validate_notebook_content(path, code_cells, markdown, embedded)
     registry = _read(tutorials / "README.md")
     _check(f"`{path.name}`" in registry, f"{path.name} missing from tutorials/README.md")
     _check(f"`{EXPECTED_PROFILE}`" in registry, f"tutorials/README.md must record `{EXPECTED_PROFILE}`")

@@ -1,140 +1,100 @@
 # Release verification
 
-`tutorials/owlv2_detection_colab.ipynb` (`TASK-INFERENCE`, **standalone** carrier) is a
-**release candidate** until the exact notebook revision has executed top-to-bottom in a clean
-supported runtime. Unit tests, JSON validation, code-cell compilation, the generator parity checks
-and `tools/validate_release_assets.py` are necessary checks but are **not** runtime evidence under
-DIMER Notebook Specification 2.0. This file is the durable release-gate record for the notebook.
+`tutorials/owlv2_detection_colab.ipynb` (`E2E`, **standalone** carrier) is
+**Release-grade** for the exact blob recorded below and returns to **Candidate** whenever the blob
+changes, until that exact blob executes top-to-bottom in a clean supported runtime. Source validation, unit tests, generator parity, and the historical inference-only
+run are not model-backed evidence for this E2E carrier under DIMER Notebook Specification 2.0.
 
 ## Automatic coverage (static, every pull request)
 
-CI runs `tools/validate_release_assets.py`, which checks:
+CI and `tools/validate_release_assets.py` verify that:
 
-- notebook JSON parses; every code cell compiles as plain Python (no `%`/`!` magics); no
-  persisted outputs or execution counts; no unresolved placeholder markers; every code cell
-  is preceded by an explanatory markdown cell;
-- exactly one tutorial notebook, named in `tutorials/README.md` with its `TASK-INFERENCE`
-  profile, the notebook-spec version and the standalone carrier; `metadata.dimer` declares that
-  profile, spec `2.0`, a pedagogical mode, `standalone: true` and `generated_from` (repository, revision, module
-  SHA-256, generator);
-- the standalone carrier (ST1–ST6, PAR1–PAR3): no clone, repository install or repository import on
-  the primary path; exactly one cell tagged `embedded_module` equal to
-  `src/owlv2_detection_pipeline/pipeline.py` after the generator's documented rewrites; the
-  inline `MANIFEST` equal to the committed snapshot manifest and the inline `PINS` equal to the
-  `pyproject.toml` runtime pins; the notebook byte-identical (on LF) to `tools/build_notebook.py`
-  output for its recorded revision; the pinned-install cell with its restart-on-stale-import guard;
-  `NOTEBOOK_SOURCE` recorded in exports;
-- `MODEL_ID`/`MODEL_REVISION` are bound only in the carried module cell (and repeated in the inline
-  manifest, which the notebook asserts against the module before fetching), the revision is a 40-hex
-  immutable commit, and the same identity string appears in `README.md`, `MODEL_CARD.md`, and
-  `docs/WEIGHTS.md` with no stray revisions;
-- the profile-specific public-API calls (`stage_missing_files`, `verify_snapshot`,
-  `Owlv2DetectionPipeline.from_pretrained(weights_dir=...)`, `validate_inputs`, `detect`,
-  `evaluation_report`), the ceiling print (`MIN_IMAGE_SIDE`, `MAX_IMAGE_SIDE`, `MAX_PROMPTS`,
-  `MAX_PROMPT_CHARS`, `MAX_TEXT_TOKENS`, `MAX_DETECTIONS`, `DETECTION_THRESHOLD`), the exports, the
-  learner-facing statements (caller-owned threshold, uncalibrated sigmoid score, score ordering, no
-  non-maximum suppression, no mAP, IoU as sanity check, capability exclusions) and the gated-off BYOD
-  default listed in the validator; forbidden patterns (credential-in-URL, any `git clone` /
-  `github.com` / repository import on the primary path, a mutable `revision='main'`, direct
-  `from transformers import` / `Owlv2ForObjectDetection` / `Owlv2Processor` /
-  `post_process_grounded_object_detection(` / `from huggingface_hub import` use **outside the carried
-  module cell**, `trust_remote_code=True`, `pickle.load`, `torch.load(`, `extractall(`);
-- `STATUS.md`, `README.md` and `tutorials/README.md` agree on one release-status token and no
-  document makes an unsupported release-grade, production-readiness or benchmark claim;
-- `MODEL_CARD.md` front matter (`model_card_spec: "1.1"`), single H1, required heading order, and
-  immutable provenance.
+- the notebook JSON parses, code cells compile, outputs and execution counts are absent, and
+  unresolved placeholders are rejected;
+- the notebook declares `E2E`, `GUIDED`, Notebook Specification 2.0, and `standalone: true`;
+- the primary path performs no repository clone/install/import and embeds `metrics.py`,
+  `samples.py`, and `pipeline.py` in dependency order with source SHA-256 parity;
+- the inline model manifest and runtime pins match the repository and the generated notebook is
+  byte-identical to `tools/build_notebook.py` output;
+- the immutable model revision, per-file digests, and local-only SafeTensors load contract agree
+  across the package, notebook, model card, README, and weight documentation;
+- the default sample uses the three digest-pinned BCCD parquet files at the immutable dataset
+  revision, constructs 260 / 40 / 64 image-disjoint records, and runs without a credential or
+  upload prompt;
+- validation, baselines, frozen evaluation, bounded adaptation, held-out evaluation, inference,
+  SafeTensors export, and fresh-base reload are all represented on the default path;
+- BYOD is optional and gated off by default, but accepts a zip or directory of images with a
+  `boxes.csv` and routes records through the same validation, split, adaptation, evaluation, and
+  export semantics; and
+- `README.md`, `STATUS.md`, this file, and `tutorials/README.md` agree on one status token for
+  the current carrier.
 
-CI also installs the pinned CPU-only torch wheel plus `transformers`, `safetensors`, `numpy` and
-`pillow`, runs `ruff check src tests tools`, `tools/build_notebook.py --check`, and the offline unit
-suite (`tests/test_pipeline.py`, `tests/test_role_helpers.py`, `tests/test_notebook_parity.py`;
-injected runner, no weights). These are source/provenance and unit checks. They are **not** execution
-evidence.
+The offline suite exercises dataset validation, digest pinning, split disjointness, metric and
+baseline semantics, Hungarian assignment, artifact manifest refusal, notebook parity, and the
+inference role helpers. Model-backed tests are skipped when Torch and the verified snapshot are not
+available. Neither an offline pass nor a source validator is clean-runtime evidence.
 
-## Executor paths
+## Supported executor
 
-| Path | Runtime | Role |
-|---|---|---|
-| Google Colab (supported user path) | Colab CPU runtime (CUDA used automatically when present) | The runtime the tutorial is written for; a clean top-to-bottom run here is promotion evidence |
-| Kaggle CLI kernel | Kaggle CPU kernel, Python 3.12 image | Reproducible clean-room executor of the same class; the notebook is pushed verbatim plus one leading shim cell that provides `google.colab` and chdirs to a scratch directory (**no repository checkout is needed — the notebook is standalone**) |
-| Local Windows-venv harness (pre-flight only) | Workstation, sequential cell executor with a `google.colab` shim, `CUDA_VISIBLE_DEVICES=-1` | Builder pre-flight to catch defects before spending cloud runs; **not** a supported runtime and not promotion evidence |
+The release gate is the workspace `kaggle-serial-gpu-test-suite` running the exact committed blob on
+a Kaggle `NvidiaTeslaT4` kernel. The harness must download the notebook from an immutable 40-character
+commit SHA, verify its Git blob SHA-1, execute it with `nbclient` in a fresh interpreter, honour an
+installation-cell restart, and harvest `evidence/run_summary.json` plus the executed notebook. Only
+one fleet kernel may run at a time.
 
 ## Supported release verification procedure
 
 Before changing the registry status from `Candidate` to `Release-grade`:
 
-1. resolve the exact PR/commit head under review and confirm static CI is green;
-2. open that exact notebook revision in a new CPU (or CUDA) runtime (Colab, or the Kaggle
-   executor above) with **no repository checkout** and a clean model cache;
-3. run the notebook top-to-bottom without editing implementation cells (form parameters at their
-   defaults for the sample path: `USE_BYOD = False`, `threshold = 0.1`);
-4. verify that Section 1 reports `NOTEBOOK_SOURCE.repository_revision` equal to the revision recorded
-   in `metadata.dimer.generated_from` and that the installed core package versions equal the inline
-   `PINS` (= `pyproject.toml`);
-5. verify every default-path stage completes:
-   - pinned runtime installed from the inline `PINS` with no GitHub access;
-   - the carried module cell executes (defines `Owlv2DetectionPipeline`, `validate_inputs`,
-     `evaluation_report`, `format_prompts`, `box_iou`, `verify_snapshot`, `stage_missing_files`) with no
-     import of the repository package;
-   - synthetic 640×480 scene drawn in code with its RGB SHA-256 printed and the ceilings
-     (`MIN_IMAGE_SIDE` 16, `MAX_IMAGE_SIDE` 4096, `MAX_PROMPTS` 16, `MAX_PROMPT_CHARS` 48,
-     `MAX_TEXT_TOKENS` 16, `MAX_DETECTIONS` 3600, `DETECTION_THRESHOLD` 0.1) surfaced;
-   - pinned `google/owlv2-base-patch16-ensemble` acquisition at the immutable revision through the
-     carried module: the inline `MANIFEST` is asserted against the module identity and written to
-     `weights/owlv2-base-patch16-ensemble/`, `stage_missing_files(WEIGHTS_DIR, allow_download=True)`
-     reports all 9 manifest entries on a clean runtime, `verify_snapshot` returns its summary dict, and
-     `from_pretrained(weights_dir=WEIGHTS_DIR)` loads from the verified directory;
-   - `validate_inputs` writes `outputs/owlv2_detection_input_manifest.json` (verdict `accepted`, three
-     normalised queries, one recorded rejection finding from the over-long-prompt probe);
-   - `detect` returning score-ordered boxes; record the labels and scores (the card-pass CPU smoke
-     returned exactly three boxes — `a red circle` 0.917, `a blue triangle` 0.810, `a black rectangle`
-     0.426 — each within about 4 px of the drawn shape; a materially different result is a finding to
-     record, not a failure by itself, because no metric is asserted);
-   - `evaluation_report` writes `outputs/owlv2_detection_evaluation_report.json` with verdict
-     `sample-sanity` and one `box_iou` entry per drawn reference box on the synthetic sample (three
-     matched with agreeing labels; `not-measurable` on BYOD), stated as such;
-   - `outputs/owlv2_detection_result.json`, `outputs/owlv2_detection_detections.csv` and
-     `outputs/owlv2_detection_annotated.png` written with `NOTEBOOK_SOURCE`, model revision, model
-     licence, runtime versions and device;
-6. verify the exports exist and the interpretation section matches the observed path;
-7. record the notebook Git blob id, commit, runtime (platform, Python, PyTorch, Transformers, device),
-   model identifier and immutable revision, whether the model cache was clean, outcome, produced
-   outputs, and any warning or applicable `SHOULD` deviation in the table below;
-8. record no access tokens or other secrets.
+1. Resolve the exact commit and notebook blob under review; confirm the source/static gate is green.
+2. Execute the exact blob on Kaggle Tesla T4 with `USE_BYOD = False` and all other sample-path
+   defaults, using the serial suite and a clean output directory.
+3. Confirm the notebook installs the inline pins, restarts if required, and records
+   `NOTEBOOK_SOURCE.repository_revision` equal to the committed revision.
+4. Confirm all 9 model files and all 3 BCCD parquet files are staged from their immutable revisions
+   and pass byte-count and SHA-256 verification before use.
+5. Confirm the sample split is exactly 260 train / 40 validation / 64 test, with no decoded image
+   digest shared between splits, and that every demonstrated invalid dataset/input is refused.
+6. Confirm the drawn-scene inference contract completes and writes its input manifest and
+   `sample-sanity` report without treating drawn-box IoU as corpus performance.
+7. Confirm the empty and grid-prior baselines and the frozen model are scored on the same held-out
+   records at the same score and IoU thresholds.
+8. Confirm only the OWLv2 class and box heads are trainable; the image/text towers remain frozen;
+   validation mAP selects the earliest best epoch; and the test split is not used for selection.
+9. Confirm the held-out comparison reports per-phrase AP, mAP, precision, recall, F1, reference and
+   predicted box counts, and makes no claim beyond one seeded split of one sample.
+10. Confirm `adapter.safetensors` and its manifest are exported, loaded into a newly constructed
+    verified base, and pass the notebook's detection-parity assertion on held-out records.
+11. Confirm every output named in `tutorials/README.md` exists and all code cells complete without
+    an exception.
+12. Append the exact commit, notebook blob, kernel version, runtime/package/device identity, wall
+    time, cell counts, staged file/byte counts, metrics, reload-parity result, warnings, and PASS or
+    FAIL verdict below. Record no secrets.
 
-A known-failing default path in the supported runtime blocks release.
+A failure of the default path, an unverified asset, an altered carried module, or missing fresh-base
+reload parity blocks promotion. A numerical improvement is not assumed: if the adapted model fails
+the notebook's stated comparison assertions, record FAIL and remediate the carrier rather than
+editing the evidence.
 
 ## Recorded executions
 
-Notebook identity is the Git blob id of `tutorials/owlv2_detection_colab.ipynb` (verify with
-`git rev-parse <commit>:tutorials/owlv2_detection_colab.ipynb`). Wall times, when recorded,
-are the sum of per-cell times reported by the executor and include installs and the model download;
-they are measurements for the stated runtime, not general estimates.
+Notebook identity is the Git blob id of `tutorials/owlv2_detection_colab.ipynb` at the recorded
+commit. Wall time is the serial executor's sum of per-cell durations and includes installs and
+downloads.
 
-### Local pre-flight evidence (not a supported runtime)
-
-| Date (UTC) | Commit / notebook blob | Executor | Path exercised | Wall | Outcome |
-|---|---|---|---|---|---|
-| 2026-09-14 | notebook blob `a37382571bee` (commit `2dd34c2`, generated at `5a8fa2f`; `NOTEBOOK_SOURCE.repository_revision` = `5a8fa2f…`) | Local Windows-venv harness (`run_nb_local.py`: nbclient 0.11.0, fresh `python3` kernel, `CUDA_VISIBLE_DEVICES=-1`, `DIMER_NOTEBOOK_CI_PREINSTALLED=1`), Python 3.12.10, torch 2.14.0+cu130, transformers 4.57.6 | Default synthetic path, all 8 code cells: pinned install skipped (pre-installed), `stage_missing_files` fetched all 9 manifest entries (620 MB) from the Hub cache at the pinned revision into the scratch `weights/`, `verify_snapshot` PASS (9 files), `detect` → 3 boxes (`a red circle` 0.917, `a blue triangle` 0.810, `a black rectangle` 0.426), `evaluation_report` `sample-sanity` (IoU 0.974 / 0.971 / 0.950, all labels agreeing), 5 outputs written | 68.6 s | PASS — pre-flight only; not promotion evidence |
-
-### Manual clean-runtime evidence
-
-| Date (UTC) | Commit / notebook blob | Executor | Path exercised | Wall | Outcome |
-|---|---|---|---|---|---|
-| 2026-09-14 | `6c9365e` / `ce245f5aa2c5` | Kaggle CPU (`kurtvalcorza/dimer-nb2-owlv2-detection` v1) | Default sample path | 243.2 s | **PASSED** — 8/8 ok code cells executed cleanly, 20 files, 622 MB staged |
+| Carrier | Commit / notebook blob | Date | Executor | Outcome |
+|---|---|---|---|---|
+| Current `E2E` carrier | `a772a31` / `c9cd132564ae` (notebook `NOTEBOOK_SOURCE.repository_revision` `49800d8`, the source revision the notebook was bound to; `49800d8..a772a31` changes only the notebook) | 2026-09-25 (22:33–22:44 UTC) | Kaggle Tesla T4 (`kurtvalcorza/dimer-nb2-owlv2-detection` v2), serial suite, `USE_BYOD = False`, sample-path defaults; blob fetched at the 40-char SHA and Git-blob verified; HF cache clean at start | **PASSED** — 705.1 s wall (pass 1 194.8 s stopped at the install cell with a pip dependency-resolver `CellExecutionError`, kernel restarted after the install cell; pass 2 510.2 s), 11/11 post-restart code cells ok; image `gcr.io/kaggle-gpu-images/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461` (image torch 2.10.0+cu128, transformers 5.0.0), Python 3.12.13, Tesla T4 15360 MiB, driver 580.159.04; after the inline pins: torch 2.14.0+cu130 (CUDA 13.0), transformers 4.57.6, device `cuda:0`, float32; staged 23 files / 626 MB (9 model files incl. `model.safetensors` 619,918,824 B, sha256 `e1e130b9…99e7`, + 3 BCCD parquet files, all digest-verified); split 260 / 40 / 64, image-disjoint; 4 dataset refusals (duplicate id, box outside image, record without boxes, too small) and 1 over-long-phrase refusal demonstrated; trainable 1,579,526 of 154,966,792 parameters (class + box heads), 8 epochs, best epoch 8 by validation mAP (validation mAP50 0.8734, n = 40); held-out test (64 records, 846 reference boxes, threshold 0.1, IoU 0.5): mAP50 empty 0.0 / grid prior 0.0147 / frozen 0.0723 / adapted 0.8918; precision 0.0 / 0.0146 / 0.1295 / 0.2236; recall 0.0 / 0.2967 / 0.0591 / 0.9894; F1 0.0 / 0.0279 / 0.0812 / 0.3647; per-phrase AP frozen → adapted: platelet 0.0 → 0.8805 (50 refs), red blood cell 0.0 → 0.8476 (731), white blood cell 0.2168 → 0.9473 (65); predicted boxes frozen 386 / adapted 3744, matched 50 / 837; `adapter.safetensors` 6,319,224 B sha256 `21694de50e3f3e5b59116cb482126669d527e3c36ee3b3f281046b14d027df7a`, fresh-base reload parity 8/8 identical detections; preserved output sha256: `owlv2_detection_result.json` `3413c0515876…`, `owlv2_detection_evaluation_report.json` `4375f7c4b904…`, adapter `manifest.json` `8cf4dc477d40…`, `owlv2_detection_train.csv` `0557c03e6b02…`; warning: one `UserWarning` (tensor with `requires_grad=True` converted to a scalar) in the adaptation cell. One seeded split of one sample, one runtime, no dispersion estimate |
+| Superseded `TASK-INFERENCE` | `6c9365e` / `ce245f5aa2c5` | 2026-09-14 | Kaggle CPU (`kurtvalcorza/dimer-nb2-owlv2-detection` v1) | **PASSED** — 8/8 code cells, 243.2 s, 20 files, 622 MB staged; historical inference evidence only, not evidence for the E2E blob |
+| Superseded `TASK-INFERENCE` local pre-flight | notebook blob `a37382571bee` (commit `2dd34c2`, generated at `5a8fa2f`) | 2026-09-14 | Local Windows fresh-kernel CPU harness | **PASSED** — 8/8 code cells, 68.6 s; pre-flight only |
 
 ## Current status
 
-No clean-runtime execution in a **supported** runtime (Colab or Kaggle) has been recorded yet; clean execution evidence is now recorded below. What exists: static validation (`tools/validate_release_assets.py`), the generator parity
-checks (`--check` OK), the offline unit suite, and one **local fresh-kernel execution** of the generated
-notebook (table above) that exercised the standalone carrier, the real `hf_hub_download` staging path
-into an empty `weights/` directory, verification, detection, the evaluation report and every export —
-which is necessary but not promotion evidence because the workstation is not a supported runtime. The
-registry status remains **Candidate** until a reviewer confirms a recorded supported-runtime run against
-the notebook blob under review and an integrator promotes it. Facts a reviewer should weigh: the CUDA
-path has not been executed; each `detect` costs a fixed 960×960 ViT-B/16 pass (~3 s on the reference
-CPU) regardless of image size, so a Colab CPU runtime should expect the detection cell to be the slow
-one; there is no non-maximum suppression — the smoke run's icon scene surfaced duplicate `clock` and
-`stop sign` boxes at 0.11 and 0.106 next to the real ones, and the shapes scene went from 3 boxes at 0.1 to
-5 at 0.05; a blank 4096×4096 image returned no boxes at the default threshold; and the pinned snapshot
-declares the slow `Owlv2ImageProcessor` (transformers prints a `use_fast` notice), which is the
-processor the smoke numbers were measured with.
+**Release-grade** for the exact commit `a772a31` / notebook blob `c9cd132564ae` recorded above: the
+default sample path executed top-to-bottom on Kaggle Tesla T4 with every gate in the procedure above
+satisfied (pinned assets verified, 260 / 40 / 64 image-disjoint split, refusals demonstrated, baselines
+and frozen model scored on the same held-out records, heads-only adaptation selected on validation,
+adapter export and fresh-base reload parity 8/8). The measured values are one seeded split of one
+blood-smear sample on one runtime; they carry no dispersion estimate and are not a benchmark. Any change
+to the notebook blob returns the carrier to Candidate until a new exact-blob run is recorded. The
+historical inference rows remain regression context only.
