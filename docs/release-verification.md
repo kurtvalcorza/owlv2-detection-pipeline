@@ -1,8 +1,8 @@
 # Release verification
 
-`tutorials/owlv2_detection_colab.ipynb` (`E2E`, **standalone** carrier) is a
-**Candidate** until the exact notebook blob executes top-to-bottom in a clean supported
-runtime. Source validation, unit tests, generator parity, and the historical inference-only
+`tutorials/owlv2_detection_colab.ipynb` (`E2E`, **standalone** carrier) is
+**Release-grade** for the exact blob recorded below and returns to **Candidate** whenever the blob
+changes, until that exact blob executes top-to-bottom in a clean supported runtime. Source validation, unit tests, generator parity, and the historical inference-only
 run are not model-backed evidence for this E2E carrier under DIMER Notebook Specification 2.0.
 
 ## Automatic coverage (static, every pull request)
@@ -26,8 +26,8 @@ CI and `tools/validate_release_assets.py` verify that:
 - BYOD is optional and gated off by default, but accepts a zip or directory of images with a
   `boxes.csv` and routes records through the same validation, split, adaptation, evaluation, and
   export semantics; and
-- `README.md`, `STATUS.md`, this file, and `tutorials/README.md` agree that the current carrier is
-  Candidate.
+- `README.md`, `STATUS.md`, this file, and `tutorials/README.md` agree on one status token for
+  the current carrier.
 
 The offline suite exercises dataset validation, digest pinning, split disjointness, metric and
 baseline semantics, Hungarian assignment, artifact manifest refusal, notebook parity, and the
@@ -84,14 +84,17 @@ downloads.
 
 | Carrier | Commit / notebook blob | Date | Executor | Outcome |
 |---|---|---|---|---|
-| Current `E2E` candidate | pending commit / pending blob | — | Kaggle Tesla T4 serial suite | **PENDING** — exact-blob model-backed run not started |
+| Current `E2E` carrier | `a772a31` / `c9cd132564ae` (notebook `NOTEBOOK_SOURCE.repository_revision` `49800d8`, the source revision the notebook was bound to; `49800d8..a772a31` changes only the notebook) | 2026-09-25 (22:33–22:44 UTC) | Kaggle Tesla T4 (`kurtvalcorza/dimer-nb2-owlv2-detection` v2), serial suite, `USE_BYOD = False`, sample-path defaults; blob fetched at the 40-char SHA and Git-blob verified; HF cache clean at start | **PASSED** — 705.1 s wall (pass 1 194.8 s stopped at the install cell with a pip dependency-resolver `CellExecutionError`, kernel restarted after the install cell; pass 2 510.2 s), 11/11 post-restart code cells ok; image `gcr.io/kaggle-gpu-images/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461` (image torch 2.10.0+cu128, transformers 5.0.0), Python 3.12.13, Tesla T4 15360 MiB, driver 580.159.04; after the inline pins: torch 2.14.0+cu130 (CUDA 13.0), transformers 4.57.6, device `cuda:0`, float32; staged 23 files / 626 MB (9 model files incl. `model.safetensors` 619,918,824 B, sha256 `e1e130b9…99e7`, + 3 BCCD parquet files, all digest-verified); split 260 / 40 / 64, image-disjoint; 4 dataset refusals (duplicate id, box outside image, record without boxes, too small) and 1 over-long-phrase refusal demonstrated; trainable 1,579,526 of 154,966,792 parameters (class + box heads), 8 epochs, best epoch 8 by validation mAP (validation mAP50 0.8734, n = 40); held-out test (64 records, 846 reference boxes, threshold 0.1, IoU 0.5): mAP50 empty 0.0 / grid prior 0.0147 / frozen 0.0723 / adapted 0.8918; precision 0.0 / 0.0146 / 0.1295 / 0.2236; recall 0.0 / 0.2967 / 0.0591 / 0.9894; F1 0.0 / 0.0279 / 0.0812 / 0.3647; per-phrase AP frozen → adapted: platelet 0.0 → 0.8805 (50 refs), red blood cell 0.0 → 0.8476 (731), white blood cell 0.2168 → 0.9473 (65); predicted boxes frozen 386 / adapted 3744, matched 50 / 837; `adapter.safetensors` 6,319,224 B sha256 `21694de50e3f3e5b59116cb482126669d527e3c36ee3b3f281046b14d027df7a`, fresh-base reload parity 8/8 identical detections; preserved output sha256: `owlv2_detection_result.json` `3413c0515876…`, `owlv2_detection_evaluation_report.json` `4375f7c4b904…`, adapter `manifest.json` `8cf4dc477d40…`, `owlv2_detection_train.csv` `0557c03e6b02…`; warning: one `UserWarning` (tensor with `requires_grad=True` converted to a scalar) in the adaptation cell. One seeded split of one sample, one runtime, no dispersion estimate |
 | Superseded `TASK-INFERENCE` | `6c9365e` / `ce245f5aa2c5` | 2026-09-14 | Kaggle CPU (`kurtvalcorza/dimer-nb2-owlv2-detection` v1) | **PASSED** — 8/8 code cells, 243.2 s, 20 files, 622 MB staged; historical inference evidence only, not evidence for the E2E blob |
 | Superseded `TASK-INFERENCE` local pre-flight | notebook blob `a37382571bee` (commit `2dd34c2`, generated at `5a8fa2f`) | 2026-09-14 | Local Windows fresh-kernel CPU harness | **PASSED** — 8/8 code cells, 68.6 s; pre-flight only |
 
 ## Current status
 
-**Candidate.** The current E2E source has offline/static evidence only. No local GPU work is part of
-this qualification. Its model-backed training, held-out evaluation, timing, and artifact reload must
-be established by the queued Kaggle Tesla T4 run against the exact committed notebook blob. The
-historical inference rows remain useful regression context but do not satisfy this carrier's release
-gate.
+**Release-grade** for the exact commit `a772a31` / notebook blob `c9cd132564ae` recorded above: the
+default sample path executed top-to-bottom on Kaggle Tesla T4 with every gate in the procedure above
+satisfied (pinned assets verified, 260 / 40 / 64 image-disjoint split, refusals demonstrated, baselines
+and frozen model scored on the same held-out records, heads-only adaptation selected on validation,
+adapter export and fresh-base reload parity 8/8). The measured values are one seeded split of one
+blood-smear sample on one runtime; they carry no dispersion estimate and are not a benchmark. Any change
+to the notebook blob returns the carrier to Candidate until a new exact-blob run is recorded. The
+historical inference rows remain regression context only.

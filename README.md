@@ -43,7 +43,7 @@ weights/owlv2-base-patch16-ensemble/
 
 ## Input ceilings and threshold
 
-`MIN_IMAGE_SIDE = 16`, `MAX_IMAGE_SIDE = 4096`; `MAX_PROMPTS = 16` distinct phrases of at most `MAX_PROMPT_CHARS = 48` characters, each tokenised to at most `MAX_TEXT_TOKENS = 16` CLIP tokens (longer phrases are truncated by the tokenizer); `MAX_DETECTIONS = 3600` (one candidate per image patch); `DETECTION_THRESHOLD = 0.1` (the pinned README example's value). `detect` handles one image and `detect_batch` applies one phrase vocabulary to a bounded image sequence; the processor pads every image to a square and resizes it to 960×960. See `MODEL_CARD.md` for threshold ownership, score semantics, the absence of NMS, historical inference timing, and the pending E2E gate.
+`MIN_IMAGE_SIDE = 16`, `MAX_IMAGE_SIDE = 4096`; `MAX_PROMPTS = 16` distinct phrases of at most `MAX_PROMPT_CHARS = 48` characters, each tokenised to at most `MAX_TEXT_TOKENS = 16` CLIP tokens (longer phrases are truncated by the tokenizer); `MAX_DETECTIONS = 3600` (one candidate per image patch); `DETECTION_THRESHOLD = 0.1` (the pinned README example's value). `detect` handles one image and `detect_batch` applies one phrase vocabulary to a bounded image sequence; the processor pads every image to a square and resizes it to 960×960. See `MODEL_CARD.md` for threshold ownership, score semantics, the absence of NMS, historical inference timing, and the recorded E2E Kaggle T4 run.
 
 ## Tutorials
 
@@ -53,7 +53,7 @@ weights/owlv2-base-patch16-ensemble/
 
 ## Release status
 
-**Candidate.** Source/static checks — including the offline unit suite, release-asset validation, and standalone generator parity — do not constitute model-backed or clean-runtime notebook evidence. The earlier inference-only notebook has a historical Kaggle CPU PASS, but it does not qualify this E2E blob. The exact candidate must pass the queued Kaggle Tesla T4 run before promotion.
+**Release-grade.** The exact E2E notebook blob (`c9cd132564ae` at commit `a772a31`) executed top-to-bottom on Kaggle Tesla T4 (`kurtvalcorza/dimer-nb2-owlv2-detection` v2, 2026-09-25 UTC, 705.1 s): on one seeded BCCD split (64 held-out records) the adapted heads measured test mAP50 0.8918 versus 0.0723 frozen and 0.0147 grid prior, and the exported adapter reloaded into a fresh base with 8/8 identical detections. See `docs/release-verification.md` for the record. The offline suite, release-asset validation and generator parity remain source checks only; a changed notebook blob needs a new exact-blob run. The earlier inference-only notebook's Kaggle CPU PASS is historical.
 
 ## Documentation
 
