@@ -49,7 +49,7 @@ Before changing the registry status from `Candidate` to `Release-grade`:
 1. Resolve the exact commit and notebook blob under review; confirm the source/static gate is green.
 2. Execute the exact blob on Kaggle Tesla T4 with `USE_BYOD = False` and all other sample-path
    defaults, using the serial suite and a clean output directory.
-3. Confirm the notebook installs the inline pins, restarts if required, and records
+3. Confirm Section 1 builds (or reuses) the isolated hash-locked environment with no restart, and the notebook records
    `NOTEBOOK_SOURCE.repository_revision` equal to the committed revision.
 4. Confirm all 9 model files and all 3 BCCD parquet files are staged from their immutable revisions
    and pass byte-count and SHA-256 verification before use.

@@ -22,6 +22,20 @@ TEMPLATE = {
     "notebook_name": "owlv2_detection_colab.ipynb",
     "profile": "E2E",
     "mode": "GUIDED",
+    "isolated_runtime": True,
+    "infrastructure_labels": True,
+    # The fleet's uv isolated-environment mechanism (generator /2.2): managed CPython, a
+    # size- and SHA-256-verified uv wheel, and a lock compiled from the pyproject pins with
+    # `uv pip compile pyproject.toml --python-version 3.12 --python-platform x86_64-manylinux_2_28 --generate-hashes
+    # --only-binary :all: -o tutorials/requirements-colab.lock.txt`.
+    "managed_python": "3.12.12",
+    "uv": {
+        "version": "0.12.15",
+        "url": "https://files.pythonhosted.org/packages/1e/fd/432451d732917c49152a291de3ef171aa6b0f1a22d39780fb2c1f085ca4c/uv-0.12.15-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "bytes": 20081404,
+        "sha256": "aee9802f46bae436bd91751bb33ddeb379ef1596b5c19df193219d545d244b60",
+    },
+    "lock": "tutorials/requirements-colab.lock.txt",
     "pipeline_class": "Owlv2DetectionPipeline",
     "weights_key": "owlv2-base-patch16-ensemble",
     "modules": ["pipeline.py", "metrics.py", "samples.py"],
@@ -52,7 +66,7 @@ TEMPLATE = {
     ],
     "capability": "zero-shot (open-vocabulary, text-prompted) object detection — one image plus 1–16 free-text phrases → score-ordered boxes labelled with the phrase they matched — and bounded supervised fine-tuning of the OWLv2 class and box heads on labelled (image, phrases, boxes) records, using the pinned `google/owlv2-base-patch16-ensemble` weights",
     "run_all": (
-        "Selecting **Run all** in a fresh supported runtime installs the pinned dependencies, stages and digest-verifies the "
+        "Selecting **Run all** in a fresh supported runtime builds an isolated hash-locked environment from the pinned dependencies (nothing is installed into the notebook kernel, so no restart is needed), stages and digest-verifies the "
         "pinned `google/owlv2-base-patch16-ensemble` snapshot (a 620 MB `model.safetensors`; no pickle is opened anywhere), "
         "fetches the three BCCD parquet files from the Hugging Face Hub at an immutable revision (4.8 MB together; each "
         "refused on any SHA-256 or byte-count mismatch), turns the 364 blood-smear photographs into (image, phrases, boxes) "
@@ -64,11 +78,11 @@ TEMPLATE = {
         "model, exports the adapter as safetensors with a manifest, and reloads that artifact into a fresh pipeline to verify "
         "detection parity. The default path needs no repository clone, no DIMER worker or service, no credential, no upload "
         "dialog and no configuration edit (NOTEBOOK_SPEC 2.0 §5). A CUDA runtime is used automatically when present. "
-        "Supported-runtime timing and model-backed results have not yet been recorded for this candidate; the queued "
-        "Kaggle Tesla T4 clean-runtime run is the execution gate."
+        "A Kaggle Tesla T4 run of the previous notebook version (same model stages) is recorded in `docs/release-verification.md`; "
+        "this version still needs its own clean-runtime run."
     ),
     "byod": (
-        "After the tutorial workflow completes, set `USE_BYOD = True` in Section 4 and re-run from that cell to upload one zip "
+        "After the tutorial workflow completes, set `USE_BYOD = True` and `BYOD_PATH` (a zip already in the runtime; on Colab an empty path opens an upload dialog) in Section 4 and re-run from that cell to supply one zip "
         "of images plus a `boxes.csv` (`file`, `prompt`, `x0`, `y0`, `x1`, `y1`, optional `id`; one row per object, at least "
         "eight images, at most 16 distinct phrases). The records pass through the same validation, image-disjoint split, "
         "baselines, fine-tuning, held-out evaluation, artifact export and reload-parity cells as the BCCD sample. Uploaded "
@@ -97,6 +111,9 @@ TEMPLATE = {
         "before the processor or the model is constructed. The pipeline runs in **float32 on every device**: the adapter is "
         "trained in float32 and overlays without a cast, and CPU, Tesla-class and consumer GPUs then run the same arithmetic."
     ),
+    "guided": {"opening": [(
+        "**Who this notebook is for.** A learner who knows basic Python, has used Colab or Jupyter and has met bounding boxes, and wants to see how an open-vocabulary detector finds objects from free-text phrases, how to score detections honestly against baselines, and how to adapt its heads to a new image family without fooling themselves. The audience is students and practitioners preparing their own labelled boxes; no prior experience with OWLv2, CLIP or fine-tuning is assumed — each term is explained where it first matters and again in the **Glossary**. A T4 GPU runtime is strongly recommended (the image tower runs at 960 × 960); CPU works but is slow.\n\n**Input → Model → Output.**\n\n| | Open-vocabulary detection | Bounded head fine-tuning |\n|---|---|---|\n| Input | one image and 1–16 free-text phrases | labelled records `{{id, image, boxes}}`: 364 public-domain BCCD blood-smear photographs with 4,886 cell boxes (260 train, 40 validation, 64 test) or your own zip |\n| Model | OWLv2: CLIP image and text towers, a box head and a class head over 3,600 patches; a box survives when its sigmoid score reaches the threshold (no non-maximum suppression) | the same model with only the class and box heads trained (1,579,526 parameters) on cached frozen-tower features, Hungarian-matched focal + L1 + GIoU loss |\n| Output | score-ordered boxes, each labelled with the phrase it matched | held-out mAP@0.5, per-phrase AP, precision and recall beside an empty and a grid-prior baseline, and a 6.3 MB safetensors adapter that reloads with identical detections |\n\n**How to use this notebook.** Choose **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**. Run all completes in one pass: Section 1 installs nothing into the notebook's own Python, so no restart is needed (the recorded hosted run of the previous version needed one; this version removes it). Sections 1–3 are **infrastructure** — the isolated environment, the carried package and the verified snapshot — and their cells are collapsed; you may run them without studying them. The learning path starts in Section 4. Form fields (`# @param`) are the only values meant to be edited, and the defaults reproduce the recorded run. Before each principal result the notebook asks you to **Predict**; after it comes a collapsible **Check your reasoning** with a worked answer from the recorded Kaggle T4 run of 25 September 2026. **Troubleshooting**, a **Glossary** and a **Conclusion** template are at the end. Writing your predictions down is optional.\n\n**Roadmap:** 1–3 infrastructure → 4 BCCD records, phrases and an image-disjoint split *(evaluation practice)* → 5 the inference contract on drawn shapes *(core concept: sigmoid scores, caller-owned threshold)* → 6 two baselines and the frozen model *(evaluation practice)* → 7 bounded fine-tuning of the heads *(core concept: what is trained)* → 8 held-out evaluation → 9 the boxes by eye, the drawn scene again, export and reload *(engineering)* → conclude."
+    )]},
     "learning_objectives": (
         "install the pinned runtime; read what the carried package guarantees; stage and digest-verify the immutable "
         "upstream snapshot; fetch a digest-pinned labelled box set, turn it into (image, phrases, boxes) records, validate "
@@ -117,7 +134,8 @@ TEMPLATE = {
         "here), and any claim that blood-cell boxes stand in for your images. The repository exposes none of these."
     ),
     "prerequisites": [
-        "- **Runtime:** a fresh supported runtime (Google Colab or Kaggle, Python 3.12; CPU or CUDA). The default path uses CUDA automatically when present. The image tower runs `EVAL_BATCH_SIZE` records per forward at 960 × 960. Supported-runtime timing has not yet been recorded for this candidate; the queued Kaggle Tesla T4 run is the execution gate. The pinned `torch==2.14.0` install and the 620 MB checkpoint are the large downloads; the parquet files are 4.8 MB. The feature cache holds about 1.7 GB of half-precision tensors on the host for 300 records (5.5 MB each).",
+        '- **Learner:** basic Python and Colab or Jupyter familiarity; no prior experience with OWLv2, CLIP or fine-tuning. Sigmoid scores, thresholds, IoU, AP and mAP, baselines, matched losses and adapters are explained where they are first used and again in the Glossary.',
+        "- **Runtime:** a fresh supported **Linux x86_64** runtime (Google Colab, Kaggle or Linux Jupyter; CPU or CUDA). Section 1 builds its own Python 3.12.12 environment from a hash-locked list of manylinux wheels, so the Python version of the kernel itself does not matter and nothing is installed into it; a Windows or macOS kernel is not supported. The default path uses CUDA automatically when present. The image tower runs `EVAL_BATCH_SIZE` records per forward at 960 × 960. Supported-runtime timing has not yet been recorded for this candidate; the queued Kaggle Tesla T4 run is the execution gate. The pinned `torch==2.14.0` install and the 620 MB checkpoint are the large downloads; the parquet files are 4.8 MB. The feature cache holds about 1.7 GB of half-precision tensors on the host for 300 records (5.5 MB each).",
         "- **Knowledge:** basic Python, NumPy and PIL; what a bounding box in xyxy pixel coordinates is; what intersection-over-union, average precision and a precision/recall pair at one threshold measure and why 64 records from one draw give no dispersion; why a self-drawn scene is a plumbing check while a held-out split of one labelled set is a measurement of that set only.",
         "- **Data contract:** records are `{id, image, boxes}` — `image` a PIL image (or a file decodable by Pillow) with sides within 16..4,096 px and `boxes` 1..200 entries `{prompt, box}`: a phrase of at most 48 characters (normalised like a query; at most 16 distinct phrases per dataset) and an `[x0, y0, x1, y1]` pixel box inside the image at least 1 px wide and tall. Ids match `[A-Za-z0-9_.:-]{1,64}` and are unique; a dataset needs 8..5,000 records; splitting de-duplicates by decoded pixels so no image lands in two splits. BYOD accepts one zip (or directory) of images plus a `boxes.csv` in the layout named above.",
         "- **Validation is structural, not semantic:** every image is decoded and every phrase and box checked, but nothing checks that a box outlines what its phrase names — a mislabelled set is fine-tuned on without complaint.",
@@ -141,6 +159,7 @@ TEMPLATE = {
                 "per image, one white blood cell, one platelet), three digests, and four refusal probes — a duplicate id, a "
                 "box outside its image, a record without boxes, and a dataset too small to use — each rejected before the "
                 "model does anything."
+                '\n\n**Predict before running:** why split by image rather than by box? About how many boxes of each cell type will a typical image hold?'
             ),
             "code": (
                 "import hashlib\n"
@@ -149,18 +168,37 @@ TEMPLATE = {
                 "import numpy as np\n"
                 "from PIL import Image, ImageDraw, ImageFont\n\n"
                 "USE_BYOD = False  # @param {{type:\"boolean\"}}\n"
+                "BYOD_PATH = ''  # @param {{type:\"string\"}}\n"
                 "SPLIT_SEED = 42  # @param {{type:\"integer\"}}\n\n"
                 "os.makedirs('outputs', exist_ok=True)\n"
+                'def byod_file(path, kind, suffixes=()):\n'
+                '    """BYOD path first (works on Colab, Kaggle and Jupyter); on Colab an empty path opens the upload dialog."""\n'
+                '    if str(path).strip():\n'
+                '        source = Path(str(path).strip()).expanduser()\n'
+                '        if not source.is_file():\n'
+                "            raise FileNotFoundError(f'BYOD path {{str(source)!r}} does not exist or is not a file (relative paths start at {{os.getcwd()}}); give the path of one {{kind}}.')\n"
+                '    else:\n'
+                '        try:\n'
+                '            from google.colab import files\n'
+                '        except ImportError:\n'
+                "            raise RuntimeError(f'BYOD is on but its path field is empty, and the upload dialog exists only in Google Colab: copy the {{kind}} into this runtime (or attach it as a Kaggle dataset) and set the path field.') from None\n"
+                '        uploaded = files.upload()\n'
+                '        if len(uploaded) != 1:\n'
+                "            raise ValueError(f'Upload exactly one {{kind}} (received {{len(uploaded)}} files; a cancelled dialog sends none). Run this cell again.')\n"
+                '        name, payload = next(iter(uploaded.items()))\n'
+                "        source = Path('work') / Path(name).name\n"
+                '        source.parent.mkdir(parents=True, exist_ok=True)\n'
+                '        source.write_bytes(payload)\n'
+                '    if suffixes and not source.name.lower().endswith(tuple(suffixes)):\n'
+                '        raise ValueError(f\'{{source.name}}: expected a {{kind}} ending in {{" or ".join(suffixes)}}.\')\n'
+                '    return source\n'
+                '\n'
+                '\n'
                 "if USE_BYOD:\n"
-                "    from google.colab import files\n"
-                "    uploaded = files.upload()\n"
-                "    file_name, payload = next(iter(uploaded.items()))\n"
-                "    byod_zip = Path('work') / 'byod.zip'\n"
-                "    byod_zip.parent.mkdir(parents=True, exist_ok=True)\n"
-                "    byod_zip.write_bytes(payload)\n"
+                "    byod_zip = byod_file(BYOD_PATH, 'zip of images plus boxes.csv', ('.zip',))\n"
                 "    records = load_byod_dataset(byod_zip)\n"
                 "    splits = split_dataset(records, seed=SPLIT_SEED)\n"
-                "    data_source = 'BYOD (' + file_name + ')'\n"
+                "    data_source = 'BYOD (' + byod_zip.name + ')'\n"
                 "    raw_rows = {{'byod': len(records)}}\n"
                 "else:\n"
                 "    t0 = time.perf_counter()\n"
@@ -211,6 +249,11 @@ TEMPLATE = {
                 "        print({{'probe': name, 'verdict': 'accepted'}})\n"
                 "    except (TypeError, ValueError) as exc:\n"
                 "        print({{'probe': name, 'rejected': str(exc)[:110]}})"
+            ),
+        },
+        {
+            "md": (
+                '<details><summary>Check your reasoning</summary>Boxes in one photograph share its staining, focus and crowding, so a box-level split would put near-copies of a test cell in training. The recorded run split 260 / 40 / 64 images with no image shared (by decoded-pixel digest); a typical image holds about eleven red blood cells, one white blood cell and one platelet, so the test split has 846 reference boxes, 731 of them red blood cells. All four refusal probes were rejected before the model ran.</details>'
             ),
         },
         {
@@ -300,8 +343,16 @@ TEMPLATE = {
                 "`EVAL_BATCH_SIZE`, keeps the boxes whose sigmoid reaches `THRESHOLD`, and scores them. Do not assume the "
                 "frozen detector's behaviour in advance: read its mAP, per-phrase APs, precision, recall, box counts and "
                 "per-record rows from this run."
+                '\n\n**Predict before running:** the detector has never seen blood smears or these phrases. Will its frozen mAP@0.5 be closer to the empty baseline or to 1? Which phrase do you expect it to find best?'
             ),
             "code": (
+                '# SWP-F: adapt() trains the heads of `pipe` in place. If this pipeline was already adapted (a re-run after\n'
+                '# Section 7), start again from the pinned, digest-verified snapshot, so the frozen scores and every new\n'
+                '# adaptation begin from the frozen heads they are labelled with.\n'
+                'if pipe.adapter is not None:\n'
+                '    pipe = Owlv2DetectionPipeline.from_pretrained(weights_dir=WEIGHTS_DIR)\n'
+                "    print({{'reloaded_frozen_pipeline': True, 'reason': 'the previous pipeline had been adapted in place'}})\n"
+                '\n'
                 "METRICS = ('map50', 'precision', 'recall', 'f1')\n\n"
                 "baseline_empty = empty_baseline(test_records)\n"
                 "baseline_grid = grid_baseline(test_records, train_records)\n"
@@ -314,6 +365,11 @@ TEMPLATE = {
                 "print({{'definitions': frozen_test['definitions']}})\n"
                 "for row in frozen_test['rows'][:4]:\n"
                 "    print(row)"
+            ),
+        },
+        {
+            "md": (
+                '<details><summary>Check your reasoning</summary>Close to the floor. In the recorded run the empty baseline scored mAP@0.5 0.0, the grid prior 0.0147 and the frozen model 0.0723, with precision 0.1295 and recall 0.0591: it kept 386 boxes for 846 references and matched 50. Per phrase, only `a white blood cell` (the largest, most distinctive cell) had a non-zero AP, 0.2168; platelets and red blood cells scored 0.0.</details>'
             ),
         },
         {
@@ -334,7 +390,10 @@ TEMPLATE = {
                 "model's validation rates; every epoch is scored on the 40 validation records at `THRESHOLD`, and the epoch "
                 "with the **highest validation mAP** (the earliest on ties) is kept.\n\n"
                 "Read the emitted epoch history rather than assuming improvement: it records the validation mAP and loss "
-                "for every epoch, then restores the earliest epoch with the highest validation mAP."
+                "for every epoch, then restores the earliest epoch with the highest validation mAP. If `pipe` was already adapted by an "
+                "earlier run of this cell, the cell first reloads the frozen pipeline from the verified snapshot, so epoch 0 really "
+                "is the frozen model (Section 6 does the same before scoring the frozen model)."
+                '\n\n**Predict before running:** only 1.6 M of 155 M parameters are trained. Will the validation mAP keep rising for all eight epochs, and which epoch will be kept?'
             ),
             "code": (
                 "EPOCHS = 8  # @param {{type:\"integer\"}}\n"
@@ -350,10 +409,22 @@ TEMPLATE = {
                 "    if 'note' in entry:\n"
                 "        row['note'] = entry['note']\n"
                 "    print(row)\n\n\n"
+                '# SWP-F: adapt() trains the heads of `pipe` in place. If this pipeline was already adapted (a re-run after\n'
+                '# Section 7), start again from the pinned, digest-verified snapshot, so the frozen scores and every new\n'
+                '# adaptation begin from the frozen heads they are labelled with.\n'
+                'if pipe.adapter is not None:\n'
+                '    pipe = Owlv2DetectionPipeline.from_pretrained(weights_dir=WEIGHTS_DIR)\n'
+                "    print({{'reloaded_frozen_pipeline': True, 'reason': 'the previous pipeline had been adapted in place'}})\n"
+                '\n'
                 "t0 = time.perf_counter()\n"
                 "adapt_result = pipe.adapt(train_records, val_records, prompts=PROMPTS, epochs=EPOCHS, lr=LEARNING_RATE, batch_size=BATCH_SIZE, threshold=THRESHOLD, progress=report)\n"
                 "adapt_seconds = round(time.perf_counter() - t0, 1)\n"
                 "print({{'threshold': adapt_result['threshold'], 'iou_threshold': adapt_result['iou_threshold'], 'prompts': adapt_result['prompts'], 'trainable_parameters': adapt_result['n_trainable'], 'total_parameters': adapt_result['n_total'], 'best_epoch': adapt_result['best_epoch'], 'selection': adapt_result['selection'], 'loss': adapt_result['loss'], 'cache_seconds': adapt_result['cache_seconds'], 'seconds': adapt_seconds}})"
+            ),
+        },
+        {
+            "md": (
+                '<details><summary>Check your reasoning</summary>In the recorded run the best validation mAP@0.5 was 0.8734 at **epoch 8**, the last one, so selection kept the final epoch this time; with more epochs or a higher learning rate an earlier epoch can win. Training only the heads is enough because the frozen towers already describe the image; the heads learn which patches are cells and how to box them.</details>'
             ),
         },
         {
@@ -364,11 +435,12 @@ TEMPLATE = {
                 "side. Read it in this order: **mAP@0.5** first (the measure the epoch was selected on), then the "
                 "**per-phrase APs**, then **precision** and **recall** together — a gain in one at the cost of the "
                 "other is a moved threshold, not a better detector), then the number of predicted boxes against the "
-                "reference count. The cell asserts the adapted mAP is at least the frozen one and above the grid-prior "
-                "baseline. Sixty-four records from one seeded split give **no dispersion estimate**; the deltas are "
+                "reference count. The cell reports (in `verdicts`, without stopping a BYOD run before export) whether the adapted mAP "
+                "is at least the frozen one and above the grid-prior baseline. Sixty-four records from one seeded split give **no dispersion estimate**; the deltas are "
                 "sample-sanity evidence that the adaptation contract works, not a benchmark, and a result on one "
                 "blood-smear set's three cell types says nothing about other phrases, other images or your data until you "
                 "measure them."
+                "\n\n**Predict before running:** will the adapted model's precision and recall rise together? Will it predict more or fewer boxes than there are reference boxes?"
             ),
             "code": (
                 "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)\n"
@@ -396,12 +468,19 @@ TEMPLATE = {
                 "    'adaptation': {{k: v for k, v in adapt_result.items() if k not in ('history', 'trainable_names')}},\n"
                 "    'history': adapt_result['history'],\n"
                 "    'adaptation_seconds': adapt_seconds,\n"
+                "    'verdicts': {{'adapted_map50_at_least_frozen': adapted_test['map50'] >= frozen_test['map50'], 'adapted_above_grid_prior': adapted_test['map50'] > baseline_grid['map50']}},\n"
                 "}}\n"
                 "with open('outputs/{stem}_evaluation_report.json', 'w', encoding='utf-8') as f:\n"
                 "    json.dump(evaluation_report_payload, f, indent=2, ensure_ascii=False)\n"
-                "assert adapted_test['map50'] >= frozen_test['map50']\n"
-                "assert adapted_test['map50'] > baseline_grid['map50']\n"
+                "if not all(evaluation_report_payload['verdicts'].values()):\n"
+                "    print('The adapted model did not reach the frozen mAP or did not beat the grid prior; the report, export and reload still run. Read the baselines and the epoch history before trusting it.')\n"
+
                 "print({{'report': 'outputs/{stem}_evaluation_report.json', 'adapted_beats_both_baselines': adapted_test['map50'] > max(baseline_empty['map50'], baseline_grid['map50'])}})"
+            ),
+        },
+        {
+            "md": (
+                '<details><summary>Check your reasoning</summary>Not together. In the recorded run mAP@0.5 rose from 0.0723 to 0.8918, recall from 0.0591 to 0.9894, but precision only from 0.1295 to 0.2236: the adapted model kept 3,744 boxes for 846 references (837 matched), so most kept boxes are duplicates — there is no non-maximum suppression and the threshold stayed at 0.1. mAP ranks by score and is barely hurt by low-scoring duplicates; precision at one threshold is. Per phrase: platelet 0.0 → 0.8805, red blood cell 0.0 → 0.8476, white blood cell 0.2168 → 0.9473. The verdict line records the comparison instead of stopping the notebook.</details>'
             ),
         },
         {
@@ -421,6 +500,7 @@ TEMPLATE = {
                 "manifest, its digest and its exact tensor set **before** deserialising, refuses any tensor outside the two "
                 "heads, and overlays the tensors onto a freshly loaded base — a new object from files, not the in-memory "
                 "model (VER2). The cell asserts identical detections on eight test records (VER4)."
+                '\n\n**Predict before running:** the reloaded pipeline is rebuilt from the adapter file and the pinned base. Will its detections on eight test records match exactly?'
             ),
             "code": (
                 "import shutil\n\n"
@@ -478,6 +558,11 @@ TEMPLATE = {
                 "print(sorted(os.listdir('outputs')))"
             ),
         },
+        {
+            "md": (
+                '<details><summary>Check your reasoning</summary>Yes: the recorded run reported 8 of 8 identical detections, and the adapter was 6,319,224 bytes. The drawn scene after adaptation is qualitative only — the heads were tuned on cells, so expect different scores on shapes they were never shown.</details>'
+            ),
+        },
     ],
     "closing": (
         "## Interpretation and limits\n\n"
@@ -512,12 +597,37 @@ TEMPLATE = {
         "`0.05` or `0.3` before Section 6 and read how precision and recall trade against each other for both the frozen "
         "and the adapted model; change `SPLIT_SEED` and read how much 64 records move; or bring your own boxes through "
         "BYOD and read the two baselines before the adapted number.\n\n"
-        "**Troubleshooting.** `RuntimeError: Core dependencies changed while older modules were loaded` in Section 1: the "
-        "pinned install replaced a package the runtime had pre-imported — restart the runtime and rerun from the top. "
-        "`FileNotFoundError: snapshot file missing` or a `sha256`/`size` `ValueError` in Section 3: a staged file is "
-        "incomplete or altered — delete it from `weights/owlv2-base-patch16-ensemble/` and rerun Section 3. A `sha256` "
-        "`ValueError` naming a parquet file in Section 4: a cached `weights/bccd/*.parquet` is incomplete — delete it and "
-        "rerun Section 4.\n\n"
+        '## Troubleshooting\n\n'
+        '- **Section 1 stops with "This notebook needs a Linux x86_64 runtime"** — use Google Colab, Kaggle or a Linux x86_64 Jupyter server.\n'
+        '- **The uv wheel fails its size/SHA-256 check, or a download in Section 1 times out** — run Section 1 again; a complete environment is reused and an incomplete one is finished. If it repeats, `files.pythonhosted.org` or `pypi.org` is blocked or altered.\n'
+        '- **You re-ran Section 1 on its own** — nothing is lost: it keeps the running worker and every variable. After a session restart, run from the top.\n'
+        '- **"The isolated environment\'s Python process exited"** — usually out of memory (the frozen-tower cache and two pipelines in Section 9); restart the session and choose **Run all** on a GPU runtime.\n'
+        '- **`FileNotFoundError: snapshot file missing` or a `sha256`/`size` `ValueError` in Section 3** — a staged file is incomplete or altered; delete it from `weights/owlv2-base-patch16-ensemble/` and run Section 3 again.\n'
+        '- **A `sha256` `ValueError` naming a parquet file in Section 4** — a cached `weights/bccd/*.parquet` is incomplete; delete it and run Section 4 again.\n'
+        '- **CUDA out of memory in Section 6 or 7** — lower `EVAL_BATCH_SIZE` or `BATCH_SIZE` and run Sections 6–9 again (numbers will differ slightly from the recorded run).\n'
+        '- **Section 8 says the adapted model did not beat the frozen model or the grid prior** — on the default path that is a finding worth recording; on your own data read the baselines and the epoch history first.\n'
+        '- **BYOD: "BYOD path … does not exist" / "the upload dialog exists only in Google Colab" / "Upload exactly one …"** — set `BYOD_PATH` to the zip in the runtime (it works on Kaggle and Jupyter); on Colab an empty path opens the dialog, and a cancelled dialog stops with that message.\n'
+        '- **BYOD: a `load_byod_dataset` or `validate_dataset` refusal** — it names the `boxes.csv` row, the file and the rule (box outside the image, too many phrases, too few images).\n\n'
+        '## Glossary\n\n'
+        '- **Open-vocabulary detection** — detecting objects named by free-text phrases rather than a fixed class list.\n'
+        '- **Patch / box head / class head** — the image is cut into 3,600 patches; the box head predicts one box per patch and the class head scores it against each phrase.\n'
+        '- **Sigmoid score / threshold** — each (patch, phrase) logit squashed into 0..1 on its own; boxes whose score reaches the caller-owned `THRESHOLD` are kept. Not a calibrated probability.\n'
+        '- **Non-maximum suppression** — merging overlapping boxes; OWLv2 here applies none, so duplicates are possible.\n'
+        '- **IoU** — intersection over union of two boxes; a detection matches a reference box at IoU ≥ 0.5.\n'
+        "- **AP / mAP@0.5** — the area under one phrase's precision–recall curve; their mean over phrases.\n"
+        '- **Precision / recall / F1** — share of kept boxes that match; share of reference boxes found; their harmonic mean.\n'
+        "- **Empty / grid-prior baseline** — predicting no box; tiling each phrase's median training box over the image.\n"
+        '- **Hungarian matching / focal, L1, GIoU loss** — the one-to-one assignment of reference boxes to patches, and the classification and box terms trained on it.\n'
+        '- **Frozen-tower cache** — the frozen image and text tower outputs computed once, so training runs only the heads.\n'
+        '- **Epoch / validation selection** — one pass over the training records; keeping the epoch with the highest validation mAP.\n'
+        '- **Adapter / reload parity** — the two trained heads only, overlaid on the pinned base; the reloaded model gives the same detections.\n'
+        '- **Isolated environment** — the separate Python 3.12.12 environment Section 1 builds from the hash lock; every later cell runs there.\n'
+        '- **BYOD** — bring your own data: your images and boxes through the same cells.\n\n'
+        '## Conclusion (your notes)\n\nOptional — fill in from **your** run:\n\n'
+        '- Empty ___, grid prior ___, frozen ___, adapted ___ (test mAP@0.5); the verdict was ___.\n'
+        '- Precision moved from ___ to ___ and recall from ___ to ___; the adapted model predicted ___ boxes against ___ references, which tells me ___.\n'
+        '- The phrase that changed most was ___, because ___.\n'
+        '- One reason not to trust this gain on my own images yet: ___.\n\n'
         "## References\n\n"
         "- Repository README: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/README.md\n"
         "- Repository model card: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/MODEL_CARD.md\n"
