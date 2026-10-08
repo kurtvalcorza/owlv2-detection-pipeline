@@ -13,8 +13,8 @@ Face Hub (``keremberke/blood-cell-object-detection``) and converted to parquet b
 the three parquet files (4.8 MB together) are fetched whole, each refused unless its SHA-256 and byte count match
 the pin, and pooled into one corpus that the pipeline splits itself. The class names become the phrases
 (``a platelet``, ``a red blood cell``, ``a white blood cell``). The domain gap is the point of the sample: the
-queued clean-runtime run measures the frozen detector before asking what the class and box heads can learn from a
-few hundred labelled microscopy images; this source-only candidate does not assume the result.
+notebook measures the frozen detector before asking what the class and box heads can learn from a few hundred
+labelled microscopy images, and does not assume the result.
 """
 # ruff: noqa: E501  -- record and pin literals are kept on single lines
 
@@ -322,11 +322,41 @@ def split_dataset(
             unique.append(record)
     random.Random(seed).shuffle(unique)
     n = len(unique)
+    sizes = _split_sizes(n, val_fraction, test_fraction)
+    short = _short_splits(sizes, val_fraction)
+    if short:
+        need = min_split_images(val_fraction, test_fraction)
+        raise ValueError(
+            f"{n} distinct images split into train {sizes['train']} / validation {sizes['validation']} / test "
+            f"{sizes['test']}: {'; '.join(short)}. At these fractions at least {need} distinct images are needed."
+        )
+    n_test, n_val = sizes["test"], sizes["validation"]
+    return {"test": unique[:n_test], "validation": unique[n_test : n_test + n_val], "train": unique[n_test + n_val :]}
+
+
+def _split_sizes(n: int, val_fraction: float, test_fraction: float) -> dict[str, int]:
     n_test = max(1, round(n * test_fraction))
     n_val = round(n * val_fraction)
-    if n - n_test - n_val < 1:
-        raise ValueError(f"{n} distinct images are too few to split into train/validation/test")
-    return {"test": unique[:n_test], "validation": unique[n_test : n_test + n_val], "train": unique[n_test + n_val :]}
+    return {"train": n - n_test - n_val, "validation": n_val, "test": n_test}
+
+
+def _short_splits(sizes: Mapping[str, int], val_fraction: float) -> list[str]:
+    """What `adapt` and `evaluate` need of each split: MIN_RECORDS training records, one validation record (when a
+    validation split is asked for) and one test record."""
+    short = []
+    if sizes["train"] < MIN_RECORDS:
+        short.append(f"the train split has {max(sizes['train'], 0)} records and needs at least {MIN_RECORDS}")
+    if val_fraction > 0 and sizes["validation"] < 1:
+        short.append("the validation split has 0 records and needs at least 1")
+    return short
+
+
+def min_split_images(val_fraction: float = 0.15, test_fraction: float = 0.2) -> int:
+    """The fewest distinct images `split_dataset` accepts at these fractions (12 at the defaults)."""
+    n = MIN_RECORDS
+    while _short_splits(_split_sizes(n, val_fraction, test_fraction), val_fraction):
+        n += 1
+    return n
 
 
 def load_byod_dataset(path: str | Path) -> list[dict[str, Any]]:

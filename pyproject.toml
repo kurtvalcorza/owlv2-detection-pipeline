@@ -15,9 +15,13 @@ dependencies = [
   "numpy==2.5.3",
   "pillow==11.3.0",
   "huggingface-hub==0.36.2",
+  # pyarrow: samples.read_corpus reads the BCCD parquet files on the default path (review OWD-m5).
+  # scipy: transformers' Owlv2ImageProcessor calls requires_backends(self, scipy) when it resizes an image.
+  "pyarrow==25.0.1",
+  "scipy==1.18.1",
 ]
 [project.optional-dependencies]
-dev = ["pyarrow==25.0.1", "pytest==8.4.2", "ruff==0.16.6"]
+dev = ["pytest==8.4.2", "ruff==0.16.6"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
