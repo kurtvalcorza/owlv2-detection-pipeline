@@ -482,6 +482,9 @@ class Owlv2DetectionPipeline:
     _processor: Any = None
     weight_sha256: str | None = None
     adapter: dict[str, Any] | None = None
+    # The frozen class/box head tensors as loaded from the verified snapshot; `adapt` always starts from them and
+    # `reset_to_base` restores them, so a re-run never scores or trains tuned heads as "frozen" (review OWD-M2).
+    _base_heads: dict[str, Any] | None = None
 
     @classmethod
     def from_pretrained(
@@ -518,12 +521,31 @@ class Owlv2DetectionPipeline:
             param.requires_grad_(False)
         weight_sha256 = _weight_digest(root) if (root / MANIFEST_NAME).is_file() else None
         pipe = cls(None, resolved_device, model, processor, weight_sha256, None)  # type: ignore[arg-type]
+        heads = set(_trainable_names(model))
+        pipe._base_heads = {name: p.detach().clone() for name, p in model.named_parameters() if name in heads}
 
         def runner(image: Image.Image, queries: list[str], threshold: float) -> list[dict]:
             return pipe.detect_batch([image], queries, threshold=threshold, batch_size=1)[0]
 
         pipe._runner = runner
         return pipe
+
+    def reset_to_base(self) -> dict[str, Any]:
+        """Restore the frozen class and box heads captured when the verified snapshot was loaded and drop any adapter,
+        so the next `evaluate` scores the frozen model. Returns whether an adapter was dropped."""
+        was_adapted = self.adapter is not None
+        if self._model is not None:
+            if self._base_heads is None:
+                raise RuntimeError("no frozen head snapshot was captured at load; reload with from_pretrained")
+            import torch
+
+            with torch.no_grad():
+                for name, param in self._model.named_parameters():
+                    if name in self._base_heads:
+                        param.copy_(self._base_heads[name])
+            self._model.eval()
+        self.adapter = None
+        return {"reset": True, "was_adapted": was_adapted}
 
     def _require_model(self) -> tuple[Any, Any]:
         if self._model is None or self._processor is None:
@@ -769,9 +791,10 @@ class Owlv2DetectionPipeline:
         classification, L1 and GIoU box terms). The frozen image tower is run once per record under no gradient and
         its feature maps cached (half precision on the host), the frozen text tower once per phrase, so each step
         runs only the heads; the logits equal the full model's. AdamW (no weight decay), gradient clipping at
-        `GRAD_CLIP`, seeded shuffling, no scheduler, no augmentation. Epoch 0 records the frozen model's validation
-        rates at `threshold`; the epoch with the highest validation mAP@`iou_threshold` (the earliest on ties) is
-        kept. On any exception the frozen heads are restored."""
+        `GRAD_CLIP`, seeded shuffling, no scheduler, no augmentation. Every call starts from the frozen heads captured
+        at load (a previous adapter is discarded first), so epoch 0 records the frozen model's validation rates at
+        `threshold` even on a re-run; the epoch with the highest validation mAP@`iou_threshold` (the earliest on
+        ties) is kept. On any exception the heads and adapter held before the call are restored."""
         from .metrics import detection_metrics
         from .samples import validate_dataset
 
@@ -805,6 +828,10 @@ class Owlv2DetectionPipeline:
         cudnn_flags = torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark
         torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
         try:
+            if self._base_heads is not None:
+                with torch.no_grad():
+                    for name, param in params.items():
+                        param.copy_(self._base_heads[name])
             model.eval()
             query_embeds = self._encode_queries(vocabulary)
             cache = self._cache(train_checked, EVAL_BATCH_SIZE)

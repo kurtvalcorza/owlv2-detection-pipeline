@@ -192,6 +192,24 @@ def test_adapt_is_transactional_when_the_progress_callback_raises(pipe, records)
     assert not any(p.requires_grad for p in pipe._model.parameters())
 
 
+def test_adapt_always_starts_from_the_frozen_heads_and_reset_restores_them(pipe, records):
+    """Review OWD-M2: a second `adapt` (a notebook re-run) starts from the frozen heads captured at load, so its epoch 0
+    is the frozen model again, and `reset_to_base` puts the frozen heads back for a frozen re-evaluation."""
+    pipe.reset_to_base()
+    frozen = pipe.evaluate(records[12:])
+    first = pipe.adapt(records[:12], records[12:], epochs=1, lr=1e-3, batch_size=4)
+    pipe.adapt(records[:12], None, epochs=2, lr=1e-3, batch_size=4)  # no validation: the tuned final epoch is kept
+    heads = dict(pipe._model.named_parameters())
+    assert any(not torch.equal(heads[name], base) for name, base in pipe._base_heads.items())
+    second = pipe.adapt(records[:12], records[12:], epochs=1, lr=1e-3, batch_size=4)
+    assert second["history"][0]["note"] == "frozen model" and second["history"][0]["val"] == first["history"][0]["val"]
+    assert pipe.reset_to_base() == {"reset": True, "was_adapted": True} and pipe.adapter is None
+    heads = dict(pipe._model.named_parameters())
+    assert all(torch.equal(heads[name], base) for name, base in pipe._base_heads.items())
+    again = pipe.evaluate(records[12:])
+    assert again["adapted"] is False and all(again[k] == frozen[k] for k in ("map50", "precision", "recall", "f1", "n_predicted_boxes"))
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not visible")
 def test_the_default_device_is_cuda_when_visible(pipe):
     assert pipe.device == "cuda:0" and next(pipe._model.parameters()).device.type == "cuda"
