@@ -1,0 +1,69 @@
+[colab] Parsing notebook '/home/kurt/colab-runs/owlv2-detection-pipeline-cbb9f81-6ce927/owlv2_detection_colab_cbb9f81_colab-cli-t4.ipynb'...
+[colab] Executing cell 1/12 - Infrastructure: build (or reuse) the isolated environment and route later cells to it...
+{'isolated_environment': '/content/dimer_isolated_env_4f685450d2eb', 'reused': False, 'isolated_python': '3.12.12', 'kernel_python': '3.13.15', 'locked_packages': 49, 'setup_seconds': 56}
+{'routed_to': '/content/dimer_isolated_env_4f685450d2eb/bin/python', 'worker_pid': 1165, 'worker_reused': False}
+[colab] Executing cell 2/12 - Infrastructure: record the runtime...
+{'notebook_source': {'repository': 'owlv2-detection-pipeline', 'repository_revision': '80e92cf6e76a32fc369f01bfc8cdd44fb2fe0ffb', 'embedded_module': 'src/owlv2_detection_pipeline/pipeline.py', 'embedded_modules': ['src/owlv2_detection_pipeline/pipeline.py', 'src/owlv2_detection_pipeline/metrics.py', 'src/owlv2_detection_pipeline/samples.py'], 'module_sha256': '471890ba940d29344e54dc82ce85ce5ab1084e517e1b2c7cb594bb88a4156dcd', 'generator': 'build_notebook.py/2.2', 'notebook_spec': '2.2'}, 'python': '3.12.12', 'executable': '/content/dimer_isolated_env_4f685450d2eb/bin/python', 'torch': '2.14.0+cu130', 'transformers': '4.57.6', 'PIL': '11.3.0', 'pyarrow': '25.0.1', 'scipy': '1.18.1', 'cuda': True}
+[colab] Executing cell 3/12 - owlv2_detection-08...
+[colab] Executing cell 4/12 - owlv2_detection-10...
+[colab] Executing cell 5/12 - owlv2_detection-12...
+[colab] Executing cell 6/12 - Infrastructure: stage and digest-verify the pinned snapshot, then load the model...
+{'model_id': 'google/owlv2-base-patch16-ensemble', 'revision': 'cfd3195ba4ea9592eec887ded089f4c08eff231d', 'license': 'apache-2.0', 'files': 9, 'total_bytes': 621510370}
+{'weights_dir': '/content/weights/owlv2-base-patch16-ensemble', 'fetched': ['README.md', 'added_tokens.json', 'config.json', 'merges.txt', 'model.safetensors', 'preprocessor_config.json', 'special_tokens_map.json', 'tokenizer_config.json', 'vocab.json']}
+{'verified_files': 9, 'revision': 'cfd3195ba4ea9592eec887ded089f4c08eff231d'}
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+{'device': 'cuda:0', 'weights_dir': '/content/weights/owlv2-base-patch16-ensemble', 'weight_sha256': 'e1e130b9e404cf91a75ad45644c1da9d7fa5284085eecc864266a6923efb99e7'}
+[colab] Executing cell 7/12 - owlv2_detection-16...
+{'data_source': "BCCD blood-cell detection (Roboflow export), all three splits pooled @ 22cf1b9d2367 (Public Domain (BCCD; Roboflow Universe 'blood-cell-detection-1ekwu' export of 2022-11-04))", 'raw_rows': {'files': ['test', 'train', 'validation'], 'bytes': 4820309, 'records': 364, 'boxes': 4886, 'seconds': 3.7}, 'splits': {'train': 260, 'validation': 40, 'test': 64}, 'prompts': ['a platelet', 'a red blood cell', 'a white blood cell']}
+{'train': {'n': 260, 'boxes': 3460, 'boxes_per_prompt': {'a red blood cell': 2936, 'a white blood cell': 267, 'a platelet': 257}, 'boxes_per_record': {'min': 1, 'max': 30, 'mean': 13.3}, 'box_area': {'min': 0.002, 'max': 0.276, 'mean': 0.039}, 'width': {'min': 416, 'max': 416}, 'height': {'min': 416, 'max': 416}, 'digest': 'a52574df27606b94...'}}
+{'validation': {'n': 40, 'boxes': 580, 'boxes_per_prompt': {'a red blood cell': 486, 'a platelet': 54, 'a white blood cell': 40}, 'boxes_per_record': {'min': 7, 'max': 25, 'mean': 14.5}, 'box_area': {'min': 0.002, 'max': 0.175, 'mean': 0.036}, 'width': {'min': 416, 'max': 416}, 'height': {'min': 416, 'max': 416}, 'digest': '93ed75874583111e...'}}
+{'test': {'n': 64, 'boxes': 846, 'boxes_per_prompt': {'a red blood cell': 731, 'a white blood cell': 65, 'a platelet': 50}, 'boxes_per_record': {'min': 1, 'max': 20, 'mean': 13.2}, 'box_area': {'min': 0.001, 'max': 0.22, 'mean': 0.038}, 'width': {'min': 416, 'max': 416}, 'height': {'min': 416, 'max': 416}, 'digest': 'a82c21df56d36933...'}}
+{'example': {'id': 'bccd-test-26', 'image': [416, 416], 'boxes': 4, 'phrases': ['a red blood cell', 'a white blood cell']}}
+{'probe': 'duplicate id', 'rejected': "duplicate id 'same'"}
+{'probe': 'box outside the image', 'rejected': 'records[0].boxes[0].box [0.0, 0.0, 426.0, 20.0] lies outside the 416x416 image'}
+{'probe': 'record without boxes', 'rejected': 'records[0]: boxes must be a list of 1..200 {prompt, box} entries'}
+{'probe': 'too small', 'rejected': '3 records; 8..5000 are required'}
+[colab] Executing cell 8/12 - owlv2_detection-19...
+{'ceilings': {'MIN_IMAGE_SIDE': 16, 'MAX_IMAGE_SIDE': 4096, 'MAX_PROMPTS': 16, 'MAX_PROMPT_CHARS': 48, 'MAX_TEXT_TOKENS': 16, 'MAX_DETECTIONS': 3600, 'NUM_PATCHES': 3600, 'DETECTION_THRESHOLD': 0.1, 'IOU_THRESHOLD': 0.5, 'MIN_RECORDS': 8, 'MAX_RECORDS': 5000, 'EVAL_BATCH_SIZE': 4, 'device': 'cuda:0'}}
+{'scene': 'synthetic_scene_640x480', 'sha256': '527ab8a8384ccb8d...', 'manifest_verdict': 'accepted', 'findings': 1}
+{'frozen': {'seconds': 1.391, 'checks': {'score_ordered': True, 'labels_are_queries': True, 'boxes_inside_the_image': True, 'identity_reported': True}, 'n_detections': 3, 'per_label': {'a black rectangle': 1, 'a red circle': 1, 'a blue triangle': 1, 'a green star': 0}, 'top': [('a red circle', 0.917, [379.3, 138.4, 560.5, 322.4]), ('a blue triangle', 0.81, [199.7, 380.9, 361.7, 462.2]), ('a black rectangle', 0.426, [79.7, 119.4, 283.9, 360.6])], 'box_iou': {'a black rectangle': {'iou': 0.974, 'label_matches': True}, 'a red circle': {'iou': 0.971, 'label_matches': True}, 'a blue triangle': {'iou': 0.95, 'label_matches': True}}, 'verdict': 'sample-sanity'}}
+[colab] Executing cell 9/12 - owlv2_detection-21...
+{'empty_baseline': {'map50': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0}, 'n': 64, 'note': 'empty'}
+{'grid_baseline': {'map50': 0.015, 'precision': 0.015, 'recall': 0.297, 'f1': 0.028}, 'prior_box_sizes': {'a red blood cell': [68.0, 87.5], 'a white blood cell': [133.0, 159.5], 'a platelet': [25.5, 34.0]}, 'n_predicted_boxes': 17152, 'note': 'grid prior (median training box per phrase tiled over the image)'}
+{'frozen_model_test': {'map50': 0.072, 'precision': 0.13, 'recall': 0.059, 'f1': 0.081}, 'adapted': False, 'n': 64, 'reference_boxes': 846, 'predicted_boxes': 386, 'matched': 50, 'verdict': 'measured', 'seconds': 49.7}
+{'frozen_per_prompt': {'a platelet': {'ap': 0.0, 'n_reference': 50, 'n_predicted': 0, 'precision': 0.0, 'recall': 0.0}, 'a red blood cell': {'ap': 0.0, 'n_reference': 731, 'n_predicted': 0, 'precision': 0.0, 'recall': 0.0}, 'a white blood cell': {'ap': 0.2168, 'n_reference': 65, 'n_predicted': 386, 'precision': 0.1295, 'recall': 0.7692}}}
+{'definitions': {'map50': 'mean over the phrases with at least one reference box of the per-phrase average precision at IoU >= iou_threshold (VOC all-points interpolation over the detections ranked by score across the whole set; a reference box is matched at most once, by the highest-scoring detection of its phrase that overlaps it enough)', 'ap': 'per-phrase average precision at IoU >= iou_threshold', 'precision': 'matched detections / all detections the score threshold let through (all phrases pooled)', 'recall': 'matched reference boxes / all reference boxes (all phrases pooled)', 'f1': 'harmonic mean of precision and recall'}}
+{'id': 'bccd-train-43', 'n_reference': 12, 'n_predicted': 6, 'matched': 1}
+{'id': 'bccd-test-30', 'n_reference': 20, 'n_predicted': 1, 'matched': 1}
+{'id': 'bccd-validation-32', 'n_reference': 17, 'n_predicted': 6, 'matched': 1}
+{'id': 'bccd-train-45', 'n_reference': 20, 'n_predicted': 17, 'matched': 1}
+[colab] Executing cell 10/12 - owlv2_detection-24...
+{'epoch': 0, 'train_loss': None, 'val_map50': 0.043, 'val_precision': 0.112, 'val_recall': 0.057, 'val_f1': 0.075, 'val_boxes': 296, 'note': 'frozen model'}
+<isolated cell 2>:773: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:820.)
+  return total, {"focal": float(focal), "l1": float(l1), "giou": float(giou)}
+{'epoch': 1, 'train_loss': 1.208, 'terms': {'focal': 0.274, 'l1': 0.049, 'giou': 0.207}, 'val_map50': 0.625, 'val_precision': 0.193, 'val_recall': 0.929, 'val_f1': 0.319, 'val_boxes': 2799}
+{'epoch': 2, 'train_loss': 0.9231, 'terms': {'focal': 0.167, 'l1': 0.043, 'giou': 0.187}, 'val_map50': 0.762, 'val_precision': 0.353, 'val_recall': 0.945, 'val_f1': 0.514, 'val_boxes': 1554}
+{'epoch': 3, 'train_loss': 0.8732, 'terms': {'focal': 0.144, 'l1': 0.042, 'giou': 0.186}, 'val_map50': 0.846, 'val_precision': 0.315, 'val_recall': 0.964, 'val_f1': 0.474, 'val_boxes': 1777}
+{'epoch': 4, 'train_loss': 0.8691, 'terms': {'focal': 0.153, 'l1': 0.041, 'giou': 0.18}, 'val_map50': 0.854, 'val_precision': 0.273, 'val_recall': 0.972, 'val_f1': 0.427, 'val_boxes': 2064}
+{'epoch': 5, 'train_loss': 0.8206, 'terms': {'focal': 0.132, 'l1': 0.04, 'giou': 0.178}, 'val_map50': 0.868, 'val_precision': 0.212, 'val_recall': 0.983, 'val_f1': 0.349, 'val_boxes': 2690}
+{'epoch': 6, 'train_loss': 0.8573, 'terms': {'focal': 0.136, 'l1': 0.043, 'giou': 0.186}, 'val_map50': 0.86, 'val_precision': 0.247, 'val_recall': 0.978, 'val_f1': 0.395, 'val_boxes': 2293}
+{'epoch': 7, 'train_loss': 0.8112, 'terms': {'focal': 0.131, 'l1': 0.04, 'giou': 0.176}, 'val_map50': 0.872, 'val_precision': 0.27, 'val_recall': 0.974, 'val_f1': 0.422, 'val_boxes': 2095}
+{'epoch': 8, 'train_loss': 0.8036, 'terms': {'focal': 0.127, 'l1': 0.04, 'giou': 0.176}, 'val_map50': 0.873, 'val_precision': 0.23, 'val_recall': 0.979, 'val_f1': 0.372, 'val_boxes': 2470}
+{'threshold': 0.1, 'iou_threshold': 0.5, 'prompts': ['a platelet', 'a red blood cell', 'a white blood cell'], 'trainable_parameters': 1579526, 'total_parameters': 154966792, 'best_epoch': 8, 'selection': 'highest validation mAP at the IoU threshold', 'loss': "Hungarian-matched sigmoid focal (alpha 0.25, gamma 2.0) + L1 + GIoU with weights {'class': 2.0, 'l1': 5.0, 'giou': 2.0}, normalised by the reference-box count; computed on cached image features", 'cache_seconds': 256.923, 'seconds': 328.0}
+[colab] Executing cell 11/12 - owlv2_detection-27...
+{'map50': {'empty': 0.0, 'grid': 0.015, 'frozen': 0.072, 'adapted': 0.892}}
+{'precision': {'empty': 0.0, 'grid': 0.015, 'frozen': 0.13, 'adapted': 0.224}}
+{'recall': {'empty': 0.0, 'grid': 0.297, 'frozen': 0.059, 'adapted': 0.989}}
+{'f1': {'empty': 0.0, 'grid': 0.028, 'frozen': 0.081, 'adapted': 0.365}}
+{'delta_vs_frozen': {'map50': 0.82, 'precision': 0.094, 'recall': 0.93, 'f1': 0.284}}
+{'per_prompt_ap': {'a platelet': {'frozen': 0.0, 'adapted': 0.8805, 'n_reference': 50}, 'a red blood cell': {'frozen': 0.0, 'adapted': 0.8476, 'n_reference': 731}, 'a white blood cell': {'frozen': 0.2168, 'adapted': 0.9473, 'n_reference': 65}}}
+{'boxes': {'reference': 846, 'frozen_predicted': 386, 'adapted_predicted': 3744, 'frozen_matched': 50, 'adapted_matched': 837}}
+{'report': 'outputs/owlv2_detection_evaluation_report.json', 'adapted_beats_both_baselines': True}
+[colab] Executing cell 12/12 - owlv2_detection-30...
+{'examples': ['bccd-test-30.png', 'bccd-train-116.png', 'bccd-train-173.png', 'bccd-train-43.png', 'bccd-train-45.png', 'bccd-validation-32.png'], 'panels': ['reference boxes', 'adapted detections'], 'palette': {'a platelet': (220, 40, 40), 'a red blood cell': (40, 70, 200), 'a white blood cell': (60, 179, 75)}}
+{'adapted': {'seconds': 0.816, 'checks': {'score_ordered': True, 'labels_are_queries': True, 'boxes_inside_the_image': True, 'identity_reported': True}, 'n_detections': 2, 'per_label': {'a black rectangle': 0, 'a red circle': 1, 'a blue triangle': 1, 'a green star': 0}, 'top': [('a blue triangle', 0.392, [194.4, 372.2, 364.3, 470.4]), ('a red circle', 0.12, [369.8, 129.2, 569.2, 335.6])], 'box_iou': {'a black rectangle': {'iou': 0.0, 'label_matches': False}, 'a red circle': {'iou': 0.787, 'label_matches': True}, 'a blue triangle': {'iou': 0.767, 'label_matches': True}}, 'verdict': 'sample-sanity'}}
+{'artifact': 'outputs/owlv2_detection_adapter', 'format': 'org.valcorza.owlv2-base-patch16-ensemble.adapter.v1', 'tensors': 12, 'bytes': 6319224, 'sha256': '21694de50e3f3e5b...', 'threshold': 0.1, 'prompts': ['a platelet', 'a red blood cell', 'a white blood cell'], 'best_epoch': 8}
+{'reload_parity': {'identical_detections': 8, 'of': 8}, 'reloaded_best_epoch': 8}
+['owlv2_detection_adapter', 'owlv2_detection_evaluation_report.json', 'owlv2_detection_example_record.png', 'owlv2_detection_examples', 'owlv2_detection_input_manifest.json', 'owlv2_detection_result.json', 'owlv2_detection_scene_adapted.json', 'owlv2_detection_scene_adapted.png', 'owlv2_detection_scene_frozen.json', 'owlv2_detection_scene_frozen.png', 'owlv2_detection_train.csv']
+[colab] Saving notebook with outputs to '/home/kurt/colab-runs/owlv2-detection-pipeline-cbb9f81-6ce927/owlv2_detection_colab_cbb9f81_colab-cli-t4_output.ipynb'...
