@@ -662,7 +662,7 @@ TEMPLATE = {
         "when you know them.\n\n"
         "Successful execution proves that the recorded repository revision's package, carried in this standalone notebook, "
         "can acquire and digest-verify the pinned model snapshot, fetch and digest-verify a real labelled box set, validate "
-        "the demonstrated dataset contract without leakage, execute the inference contract for a drawn scene and a bounded "
+        "the demonstrated dataset contract with splits free of exact decoded-image overlap, execute the inference contract for a drawn scene and a bounded "
         "fine-tuning of the heads with a DETR-style matched objective, evaluate against two non-adapted baselines and the frozen "
         "model on an image-disjoint split, and emit the shown machine-readable artifacts — without the repository being "
         "reachable. It does **not** establish benchmark superiority, detection quality on any other phrase vocabulary or "
