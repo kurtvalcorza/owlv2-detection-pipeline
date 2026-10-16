@@ -441,31 +441,51 @@ def test_owl_m6_float16_cache_wording_matches_the_code(nb: dict) -> None:
 # --- Codex peer review item 12: non-square padding, target normalisation and prediction inversion ------------------
 
 
-def test_owl_r12_non_square_box_round_trips_through_the_padded_square() -> None:
-    """A 300 x 200 image with one known box: the processor pads it to a square on the bottom/right, so the target
-    normalisation divides both axes by max(W, H); the box located in the processor's own 960 x 960 pixel_values
-    matches those fractions, and `_postprocess` maps the fractions back to the original pixel box."""
+_R12_SIZE, _R12_BOX = (300, 200), [60.0, 120.0, 180.0, 180.0]
+
+
+def _r12_image():
     import numpy as np
-    import torch
+
+    width, height = _R12_SIZE
+    pixels = np.zeros((height, width, 3), dtype=np.uint8)
+    x0, y0, x1, y1 = (int(v) for v in _R12_BOX)
+    pixels[y0:y1, x0:x1] = 255
+    return Image.fromarray(pixels)
+
+
+def test_owl_r12_processor_pads_non_square_images_bottom_right() -> None:
+    """The processor's own 960 x 960 pixel_values put the known box at its pixel coordinates divided by max(W, H) on
+    both axes (padding on the bottom/right), which is what the target normalisation assumes. Needs scipy, which the
+    Owlv2 image processor imports; CI's dependency budget has no scipy, so it runs where the runtime pins are installed."""
+    pytest.importorskip("scipy")
+    import numpy as np
     from transformers import Owlv2ImageProcessor
 
-    width, height, box = 300, 200, [60.0, 120.0, 180.0, 180.0]
-    pixels = np.zeros((height, width, 3), dtype=np.uint8)
-    x0, y0, x1, y1 = (int(v) for v in box)
-    pixels[y0:y1, x0:x1] = 255
-    image = Image.fromarray(pixels)
+    values = Owlv2ImageProcessor()(images=[_r12_image()], return_tensors="pt")["pixel_values"][0].mean(0).numpy()
+    size = values.shape[0]
+    bright = np.argwhere(values > values.max() - 0.5)
+    (ry0, rx0), (ry1, rx1) = bright.min(0), bright.max(0) + 1
+    seen = np.array([rx0, ry0, rx1, ry1], dtype=float) / size
+    expected = np.array(_R12_BOX) / max(_R12_SIZE)
+    assert np.allclose(seen, expected, atol=2.0 / size), (seen, expected)
+
+
+def test_owl_r12_non_square_box_round_trips_through_the_padded_square() -> None:
+    """A 300 x 200 image with one known box: the target normalisation divides both axes by max(W, H), and
+    `_postprocess` maps those fractions back to the original pixel box."""
+    import numpy as np
+    import torch
+
+    width, height = _R12_SIZE
+    box = list(_R12_BOX)
+    x0, y0, x1, y1 = box
+    image = _r12_image()
 
     classes, cxcywh = Owlv2DetectionPipeline._targets({"image": image, "boxes": [{"prompt": "a cell", "box": box}]}, ["a cell"])
     side = float(max(width, height))
     expected = torch.tensor([[(x0 + x1) / 2 / side, (y0 + y1) / 2 / side, (x1 - x0) / side, (y1 - y0) / side]])
     assert classes.tolist() == [0] and torch.allclose(cxcywh, expected, atol=1e-6)
-
-    values = Owlv2ImageProcessor()(images=[image], return_tensors="pt")["pixel_values"][0].mean(0).numpy()
-    size = values.shape[0]
-    bright = np.argwhere(values > values.max() - 0.5)
-    (ry0, rx0), (ry1, rx1) = bright.min(0), bright.max(0) + 1
-    seen = np.array([rx0, ry0, rx1, ry1], dtype=float) / size
-    assert np.allclose(seen, np.array(box) / side, atol=2.0 / size), (seen, np.array(box) / side)
 
     logits = torch.full((1, 1, 1), 10.0)
     dets = Owlv2DetectionPipeline._postprocess(logits, cxcywh.unsqueeze(0), ["a cell"], [(width, height)], 0.1)
