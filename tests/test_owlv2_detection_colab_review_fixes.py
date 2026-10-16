@@ -429,7 +429,125 @@ def test_owl_m6_float16_cache_wording_matches_the_code(nb: dict) -> None:
     pipeline = (ROOT / "src" / "owlv2_detection_pipeline" / "pipeline.py").read_text(encoding="utf-8")
     assert '.to("cpu", torch.float16)' in pipeline
     for text in (md, pipeline):
-        assert not re.search(r"logits equal the full model'?s(?! to within float16 rounding)", text)
+        assert "logits equal the full model" not in text
+        assert "train on float16-quantized frozen features (promoted to the head dtype)" in " ".join(text.split())
+        assert "approximates training on freshly computed float32 features" in " ".join(text.split())
     assert "run the same arithmetic" not in md
-    assert "to within float16 rounding" in md and "to within float16 rounding" in pipeline
-    assert "0.8914" in md and "0.8885" in md and "2,974" in md
+    assert "a fixed-weight comparison" in md and "0.047" in md  # the logit bound is the fixed-weight comparison
+    assert "0.8914" in md and "0.8885" in md and "0.279" in md and "0.333" in md and "2,974" in md  # training comparison
+    assert "In the reported runs" in md or "in the reported runs" in md
+
+
+# --- Codex peer review item 12: non-square padding, target normalisation and prediction inversion ------------------
+
+
+def test_owl_r12_non_square_box_round_trips_through_the_padded_square() -> None:
+    """A 300 x 200 image with one known box: the processor pads it to a square on the bottom/right, so the target
+    normalisation divides both axes by max(W, H); the box located in the processor's own 960 x 960 pixel_values
+    matches those fractions, and `_postprocess` maps the fractions back to the original pixel box."""
+    import numpy as np
+    import torch
+    from transformers import Owlv2ImageProcessor
+
+    width, height, box = 300, 200, [60.0, 120.0, 180.0, 180.0]
+    pixels = np.zeros((height, width, 3), dtype=np.uint8)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    pixels[y0:y1, x0:x1] = 255
+    image = Image.fromarray(pixels)
+
+    classes, cxcywh = Owlv2DetectionPipeline._targets({"image": image, "boxes": [{"prompt": "a cell", "box": box}]}, ["a cell"])
+    side = float(max(width, height))
+    expected = torch.tensor([[(x0 + x1) / 2 / side, (y0 + y1) / 2 / side, (x1 - x0) / side, (y1 - y0) / side]])
+    assert classes.tolist() == [0] and torch.allclose(cxcywh, expected, atol=1e-6)
+
+    values = Owlv2ImageProcessor()(images=[image], return_tensors="pt")["pixel_values"][0].mean(0).numpy()
+    size = values.shape[0]
+    bright = np.argwhere(values > values.max() - 0.5)
+    (ry0, rx0), (ry1, rx1) = bright.min(0), bright.max(0) + 1
+    seen = np.array([rx0, ry0, rx1, ry1], dtype=float) / size
+    assert np.allclose(seen, np.array(box) / side, atol=2.0 / size), (seen, np.array(box) / side)
+
+    logits = torch.full((1, 1, 1), 10.0)
+    dets = Owlv2DetectionPipeline._postprocess(logits, cxcywh.unsqueeze(0), ["a cell"], [(width, height)], 0.1)
+    assert len(dets[0]) == 1 and dets[0][0]["label"] == "a cell"
+    assert np.allclose(dets[0][0]["box"], box, atol=1e-3), dets[0][0]["box"]
+
+
+# --- Codex peer review round 2 (items 1, 4, 5, 9, 2, 6, 8, 10, 11, 13) -------------------------------------------------
+
+
+def _box(x0: float, y0: float, x1: float, y1: float, label: str = "a cell", score: float = 0.9) -> dict:
+    return {"box": [x0, y0, x1, y1], "label": label, "score": score}
+
+
+def test_owl_r4_voc_matching_counts_a_second_detection_of_a_taken_box_as_a_false_positive() -> None:
+    """Two overlapping references: the second detection overlaps the taken box most and the free one only enough.
+    VOC matching makes it a false positive; the earlier greedy best-unmatched rule would have matched the free box."""
+    from owlv2_detection_pipeline.metrics import _match, detection_metrics
+
+    refs = [{"prompt": "a cell", "box": [0, 0, 10, 10]}, {"prompt": "a cell", "box": [0, 3, 10, 13]}]
+    first, second = _box(0, 0, 10, 10, score=0.9), _box(0, 1, 10, 11, score=0.8)
+    assert box_iou_ok(second, refs)
+    assert _match([first, second], refs, 0.5) == [(0.9, "a cell", True), (0.8, "a cell", False)]
+    record = {"id": "r", "image": Image.new("RGB", (16, 16)), "boxes": refs}
+    m = detection_metrics([[first, second]], [record])
+    assert m["n_matched"] == 1 and m["precision"] == 0.5 and m["recall"] == 0.5
+    assert "conventional VOC matching" in m["definitions"]["map50"] and "retained at the score threshold" in m["definitions"]["map50"]
+
+
+def box_iou_ok(pred: dict, refs: list) -> bool:
+    from owlv2_detection_pipeline import box_iou
+
+    first_iou, second_iou = (box_iou(pred["box"], r["box"]) for r in refs)
+    return first_iou > second_iou >= 0.5
+
+
+def test_owl_r5_selection_compares_the_unrounded_validation_map() -> None:
+    from owlv2_detection_pipeline.metrics import detection_metrics
+
+    refs = [{"prompt": "a cell", "box": [0, 0, 10, 10]}, {"prompt": "a cell", "box": [20, 20, 30, 30]}, {"prompt": "a cell", "box": [40, 40, 50, 50]}]
+    record = {"id": "r", "image": Image.new("RGB", (64, 64)), "boxes": refs}
+    m = detection_metrics([[_box(0, 0, 10, 10, score=0.9), _box(60, 60, 63, 63, score=0.8), _box(20, 20, 30, 30, score=0.7)]], [record])
+    assert round(m["map50_exact"], 4) == m["map50"] and m["map50_exact"] != m["map50"]
+    source = (ROOT / "src" / "owlv2_detection_pipeline" / "pipeline.py").read_text(encoding="utf-8")
+    assert 'score = (entry["val"] or {}).get("map50_exact")' in source
+    assert '(history[0]["val"] or {}).get("map50_exact", -1.0)' in source
+
+
+def test_owl_r1_all_candidates_is_a_display_only_diagnostic() -> None:
+    def runner(image, queries, threshold):
+        dets = [_box(2, 2, 20, 20, score=0.9), _box(2, 2, 20, 20, score=0.05), _box(40, 40, 60, 60, score=0.04)]
+        return [d for d in dets if d["score"] >= threshold]
+
+    records = [{"id": f"r{i}", "image": Image.new("RGB", (64, 64), (i, i, i)), "boxes": [{"prompt": "a cell", "box": [2, 2, 20, 20]}, {"prompt": "a cell", "box": [40, 40, 60, 60]}]} for i in range(3)]
+    pipe = Owlv2DetectionPipeline(runner, "cpu")
+    plain = pipe.evaluate(records, prompts=["a cell"], threshold=0.1)
+    both = pipe.evaluate(records, prompts=["a cell"], threshold=0.1, all_candidates=True)
+    assert "all_candidates" not in plain
+    for key in ("map50", "map50_exact", "precision", "recall", "f1", "n_predicted_boxes", "n_matched", "per_prompt"):
+        assert both[key] == plain[key], key
+    # all candidates, ranked: three 0.9 hits, three 0.05 duplicates (false positives), three 0.04 hits -> AP 0.5 + 0.5 * 6/9
+    assert plain["map50"] == 0.5 and both["all_candidates"]["map50"] == 0.8333
+    assert both["all_candidates"]["n_predicted_boxes"] == 9 and "display-only" in both["all_candidates"]["note"]
+    with pytest.raises(ValueError):
+        pipe.evaluate(records, prompts=["a cell"], threshold=0.1, all_candidates="yes")
+
+
+def test_owl_r_round2_notebook_wording(nb: dict) -> None:
+    md = _markdown(nb)
+    code = "\n".join(_code(nb))
+    assert "AP50 over detections retained at score ≥ 0.1" in md and "all-candidates AP50" in md
+    assert "all_candidates=True" in code and "frozen_all_candidates_ap50" in code and "all_candidates_ap50_display_only" in code
+    assert "moved threshold, not a better detector" not in md and "is a moved threshold" not in md
+    assert "one precision/recall pair is one operating point" in md
+    assert "exploratory" in md and "report them collectively" in md
+    assert "without exact decoded-image overlap" in md and "near-duplicates are not established" in md
+    assert "Both rose, but precision remained low" in md and "plausible contributor" in md and "most kept boxes are duplicates" not in md
+    assert "**detection parity at reported precision**" in md and "'compared_at': 'label, score to 4 dp, box to 1 dp'" in code
+    assert "outperforms this training-derived grid prior" in md and "tiling order" in md
+    assert "suppressing lower-scoring boxes that overlap a higher-scoring box" in md
+    assert "IoU = 1/3" in md and "what intersection-over-union, average precision" not in md
+    assert "supervised adaptation to three fixed phrases" in md and "not a cell count" in md
+    assert "DETR-style matched objective" in md and "the upstream heads were trained with" not in md and "with the upstream objective" not in md
+    record = (ROOT / "docs" / "release-verification.md").read_text(encoding="utf-8")
+    assert "the current blob" not in record.lower() and "The current blob" not in record and "| Current `E2E` carrier" not in record

@@ -682,10 +682,14 @@ class Owlv2DetectionPipeline:
         iou_threshold: float = IOU_THRESHOLD,
         batch_size: int = EVAL_BATCH_SIZE,
         progress: Callable[[int, int], None] | None = None,
+        all_candidates: bool = False,
     ) -> dict[str, Any]:
         """Detect the phrase vocabulary (`prompts`, default: every phrase the records use) in every validated record
-        and score the detections above `threshold` against the record boxes with ``metrics.detection_metrics``
-        (per-phrase AP at `iou_threshold`, their mean, precision, recall and F1). Works with an injected runner too."""
+        and score the detections at or above `threshold` against the record boxes with ``metrics.detection_metrics``
+        (per-phrase AP50 over the retained detections at `iou_threshold`, their mean, precision, recall and F1). With
+        `all_candidates`, the same forward pass also keeps every patch candidate and adds an ``all_candidates`` block:
+        the AP50 with no score cut-off, a display-only diagnostic (the headline metrics are unchanged). Works with an
+        injected runner too."""
         from .metrics import detection_metrics
         from .samples import validate_dataset
 
@@ -696,8 +700,22 @@ class Owlv2DetectionPipeline:
         if missing:
             raise ValueError(f"records use phrases outside the evaluated vocabulary: {missing}")
         started = time.perf_counter()
-        predictions = self.detect_batch([r["image"] for r in checked], vocabulary, threshold=threshold, batch_size=batch_size, progress=progress)
+        cut = _check_threshold("threshold", threshold)
+        if not isinstance(all_candidates, bool):
+            raise ValueError("all_candidates must be a bool")
+        predictions = self.detect_batch([r["image"] for r in checked], vocabulary, threshold=0.0 if all_candidates else cut, batch_size=batch_size, progress=progress)
+        candidates = None
+        if all_candidates:
+            candidates = detection_metrics(predictions, checked, iou_threshold=iou_threshold)
+            predictions = [[d for d in dets if d["score"] >= cut] for dets in predictions]
         metrics = detection_metrics(predictions, checked, iou_threshold=iou_threshold)
+        if candidates is not None:
+            metrics["all_candidates"] = {
+                "map50": candidates["map50"],
+                "per_prompt_ap": {p: v["ap"] for p, v in candidates["per_prompt"].items()},
+                "n_predicted_boxes": candidates["n_predicted_boxes"],
+                "note": "display-only diagnostic: AP50 over every patch candidate (no score cut-off); never used for selection",
+            }
         metrics.update(
             {
                 "threshold": float(threshold),
@@ -738,7 +756,7 @@ class Owlv2DetectionPipeline:
         return classes, cxcywh
 
     def _matched_loss(self, logits: Any, boxes: Any, targets: Sequence[tuple[Any, Any]]) -> tuple[Any, dict[str, float]]:
-        """DETR-style loss on one batch: Hungarian matching of each reference box to one patch under the class,
+        """DETR-style matched objective on one batch: Hungarian matching of each reference box to one patch under the class,
         L1 and GIoU costs, then sigmoid focal loss over every (patch, query) logit (matched pairs positive), L1 and
         GIoU on the matched boxes, all normalised by the number of reference boxes in the batch."""
         import torch
@@ -790,11 +808,12 @@ class Owlv2DetectionPipeline:
         DETR-style matched loss the upstream detection heads were trained with (Hungarian matching; sigmoid focal
         classification, L1 and GIoU box terms). The frozen image tower is run once per record under no gradient and
         its feature maps cached (half precision on the host), the frozen text tower once per phrase, so each step
-        runs only the heads; the logits equal the full model's to within float16 rounding. AdamW (no weight decay), gradient clipping at
+        runs only the heads: they train on float16-quantized frozen features (promoted to the head dtype), which
+        approximates training on freshly computed float32 features. AdamW (no weight decay), gradient clipping at
         `GRAD_CLIP`, seeded shuffling, no scheduler, no augmentation. Every call starts from the frozen heads captured
         at load (a previous adapter is discarded first), so epoch 0 records the frozen model's validation rates at
-        `threshold` even on a re-run; the epoch with the highest validation mAP@`iou_threshold` (the earliest on
-        ties) is kept. On any exception the heads and adapter held before the call are restored."""
+        `threshold` even on a re-run; the epoch with the highest unrounded validation AP50 over the detections
+        retained at `threshold` (`map50_exact`; the earliest on ties) is kept. On any exception the heads and adapter held before the call are restored."""
         from .metrics import detection_metrics
         from .samples import validate_dataset
 
@@ -848,14 +867,14 @@ class Owlv2DetectionPipeline:
                         logits, boxes = self._heads(cached_val[start : start + EVAL_BATCH_SIZE], query_embeds)
                         predictions.extend(self._postprocess(logits, boxes, vocabulary, [r["image"].size for r in val_checked[start : start + EVAL_BATCH_SIZE]], cut))
                 m = detection_metrics(predictions, val_checked, iou_threshold=iou_threshold)
-                return {k: m[k] for k in ("map50", "precision", "recall", "f1", "n", "n_predicted_boxes")}
+                return {k: m[k] for k in ("map50", "map50_exact", "precision", "recall", "f1", "n", "n_predicted_boxes")}
 
             for name, param in model.named_parameters():
                 param.requires_grad_(name in params)
             history: list[dict[str, Any]] = [{"epoch": 0, "train_loss": None, "val": score_val(), "note": "frozen model"}]
             if progress is not None:
                 progress(history[-1])
-            best_epoch, best_score = 0, (history[0]["val"] or {}).get("map50", -1.0)
+            best_epoch, best_score = 0, (history[0]["val"] or {}).get("map50_exact", -1.0)
             best_state = {name: param.detach().clone() for name, param in params.items()}
             optimizer = torch.optim.AdamW(list(params.values()), lr=lr, weight_decay=0.0)
             rng = random.Random(seed)
@@ -883,7 +902,7 @@ class Owlv2DetectionPipeline:
                 history.append(entry)
                 if progress is not None:
                     progress(entry)
-                score = (entry["val"] or {}).get("map50")
+                score = (entry["val"] or {}).get("map50_exact")  # unrounded; map50 is rounded for display
                 if val_checked is None or (score is not None and score > best_score):
                     best_epoch, best_score = epoch, score if score is not None else best_score
                     best_state = {name: param.detach().clone() for name, param in params.items()}
@@ -912,7 +931,7 @@ class Owlv2DetectionPipeline:
             "epochs": epochs,
             "batch_size": batch_size,
             "best_epoch": best_epoch,
-            "selection": "highest validation mAP at the IoU threshold" if val_checked is not None else "final epoch (no validation split)",
+            "selection": "highest unrounded validation AP50 over detections retained at the score threshold (map50_exact)" if val_checked is not None else "final epoch (no validation split)",
             "loss": f"Hungarian-matched sigmoid focal (alpha {FOCAL_ALPHA}, gamma {FOCAL_GAMMA}) + L1 + GIoU with weights {LOSS_WEIGHTS}, normalised by the reference-box count; computed on cached image features",
             "lr": float(lr),
             "seed": seed,

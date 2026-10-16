@@ -121,8 +121,8 @@ TEMPLATE = {
         "out, and the three phrases are ordinary English. So the notebook measures the frozen model first and treats its "
         "score as the starting point, not as proof that the domain is new to the detector. The question is "
         "narrow and honest: does a bounded fine-tuning of "
-        "the 1,579,526-parameter heads on 260 records — the towers frozen, the DETR-style matched loss the upstream heads "
-        "were trained with — move the held-out **mAP**, **per-phrase AP**, **precision** and **recall** on an image-disjoint "
+        "the 1,579,526-parameter heads on 260 records — the towers frozen, a DETR-style matched objective — move the "
+        "held-out **mAP** (the mean of the per-phrase AP50 over detections retained at score ≥ 0.1), **per-phrase AP**, **precision** and **recall** on an image-disjoint "
         "test split past the frozen model and two **non-adapted baselines**, and what does it do to the drawn shapes the "
         "same heads detect? Nothing here is a claim about your images or your phrases: it is one seeded split of one "
         "small labelled set.\n\n"
@@ -131,8 +131,9 @@ TEMPLATE = {
         "before the processor or the model is constructed. Model and adapter weights are held in **float32 on every device**: "
         "the adapter is trained in float32 and overlays without a cast. The one exception is the training-time "
         "frozen-tower cache (Section 7), which stores image features in float16 to halve host memory. CPUs and different "
-        "GPUs do not run bit-identical arithmetic, so precision and kept-box counts at the score threshold vary across "
-        "devices and numeric paths, while mAP agrees closely (Section 8 gives the measured spread)."
+        "GPUs do not run bit-identical arithmetic. In the reported runs, precision and kept-box counts at the score "
+        "threshold differed between devices and numeric paths more than AP50 did (Section 8 gives the numbers); this "
+        "notebook does not promise the same counts on any other device."
     ),
     "guided": {"opening": [(
         "**Who this notebook is for.** A learner who knows basic Python, has used Colab or Jupyter and has met bounding boxes, and wants to see how an open-vocabulary detector finds objects from free-text phrases, how to score detections honestly against baselines, and how to adapt its heads to a new image family without fooling themselves. The audience is students and practitioners preparing their own labelled boxes; no prior experience with OWLv2, CLIP or fine-tuning is assumed — each term is explained where it first matters and again in the **Glossary**. A T4 GPU runtime is strongly recommended (the image tower runs at 960 × 960); CPU works but is slow.\n\n**Input → Model → Output.**\n\n| | Open-vocabulary detection | Bounded head fine-tuning |\n|---|---|---|\n| Input | one image and 1–16 free-text phrases | labelled records `{{id, image, boxes}}`: 364 public-domain BCCD blood-smear photographs with 4,886 cell boxes (260 train, 40 validation, 64 test) or your own zip |\n| Model | OWLv2: CLIP image and text towers, a box head and a class head over 3,600 patches; a box survives when its sigmoid score reaches the threshold (no non-maximum suppression) | the same model with only the class and box heads trained (1,579,526 parameters) on cached frozen-tower features, Hungarian-matched focal + L1 + GIoU loss |\n| Output | score-ordered boxes, each labelled with the phrase it matched | held-out mAP@0.5, per-phrase AP, precision and recall beside an empty and a grid-prior baseline, and a 6.3 MB safetensors adapter that reloads with identical detections |\n\n**How to use this notebook.** Choose **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**. Run all completes in one pass: Section 1 installs nothing into the notebook's own Python, so no restart is needed. Sections 1–3 are **infrastructure** — the isolated environment, the carried package and the verified snapshot — and their cells are collapsed; you may run them without studying them. The learning path starts in Section 4. Form fields (`# @param`) are the only values meant to be edited, and the defaults are the recorded run's settings. Before each principal result the notebook asks you to **Predict**; after it comes a collapsible **Check your reasoning** with a worked answer from **the recorded run**: the Colab Tesla T4 run of 8 October 2026 of notebook blob `a545a73b` (commit `cbb9f81`), listed in `docs/release-verification.md` [6]. That run used the same default-path computation as this revision; on a CPU or another GPU, expect precision and box counts to differ (Section 8). **Troubleshooting**, a **Glossary** and a **Conclusion** template are at the end. Writing your predictions down is optional.\n\n**Roadmap:** 1–3 infrastructure → 4 BCCD records, phrases and an image-disjoint split *(evaluation practice)* → 5 the inference contract on drawn shapes *(core concept: sigmoid scores, caller-owned threshold)* → 6 two baselines and the frozen model *(evaluation practice)* → 7 bounded fine-tuning of the heads *(core concept: what is trained)* → 8 held-out evaluation → 9 the boxes by eye, the drawn scene again, export and reload *(engineering)* → conclude."
@@ -140,11 +141,13 @@ TEMPLATE = {
     "learning_objectives": (
         "install the pinned runtime; read what the carried package guarantees; stage and digest-verify the immutable "
         "upstream snapshot; fetch a digest-pinned labelled box set, turn it into (image, phrases, boxes) records, validate "
-        "it and split it by image without leakage; detect in a drawn scene through the public API and read the output "
+        "it and split it by image without exact decoded-image overlap; compute the intersection-over-union of two boxes "
+        "(for example `[0, 0, 10, 10]` and `[5, 0, 15, 10]` share 50 px² of a 150 px² union, IoU = 1/3, below the 0.5 "
+        "needed to match) and read AP50 as the area under one phrase's precision–recall curve; detect in a drawn scene through the public API and read the output "
         "contract correctly (an uncalibrated sigmoid, a caller-owned threshold, no non-maximum suppression, a "
         "`sample-sanity` report only against boxes you drew yourself); measure the frozen model's held-out per-phrase AP, "
-        "mAP, precision and recall beside two non-adapted baselines; run a bounded fine-tuning of the heads with the "
-        "Hungarian-matched focal + L1 + GIoU loss, explicit hyperparameters and validation-based epoch selection; evaluate "
+        "mAP, precision and recall beside two non-adapted baselines; run a bounded fine-tuning of the heads with a "
+        "Hungarian-matched focal + L1 + GIoU objective, explicit hyperparameters and validation-based epoch selection; evaluate "
         "on an image-disjoint test split; look at the adapted boxes next to the references and at what the drawn scene does "
         "after the shared heads were tuned; and export a safetensors adapter that reloads against the pinned base with "
         "verified parity."
@@ -159,7 +162,7 @@ TEMPLATE = {
     "prerequisites": [
         '- **Learner:** basic Python and Colab or Jupyter familiarity; no prior experience with OWLv2, CLIP or fine-tuning. Sigmoid scores, thresholds, IoU, AP and mAP, baselines, matched losses and adapters are explained where they are first used and again in the Glossary.',
         "- **Runtime:** a fresh supported **Linux x86_64** runtime (Google Colab, Kaggle or Linux Jupyter; CPU or CUDA). Section 1 builds its own Python 3.12.12 environment from a hash-locked list of manylinux wheels, so the Python version of the kernel itself does not matter and nothing is installed into it; a Windows or macOS kernel is not supported. The default path uses CUDA automatically when present. The image tower runs `EVAL_BATCH_SIZE` records per forward at 960 × 960. **Timing (measured):** the recorded run (Colab Tesla T4, 8 October 2026, blob `a545a73b`) took 598.8 s end to end in one pass, including the one-time build of the isolated environment. **CPU** is supported but slow: about 500 image-tower passes at 960 × 960 dominate, so expect roughly two hours on a two-core hosted CPU runtime (an estimate from a local two-thread measurement of about 13 s per pass, not a recorded run); use a GPU runtime. The pinned `torch==2.14.0` install and the 620 MB checkpoint are the large downloads; the parquet files are 4.8 MB. The feature cache holds about 1.7 GB of half-precision tensors on the host for 300 records (5.5 MB each).",
-        "- **Knowledge:** basic Python, NumPy and PIL; what a bounding box in xyxy pixel coordinates is; what intersection-over-union, average precision and a precision/recall pair at one threshold measure and why 64 records from one draw give no dispersion; why a self-drawn scene is a plumbing check while a held-out split of one labelled set is a measurement of that set only.",
+        "- **Knowledge:** basic Python, NumPy and PIL; what a bounding box in xyxy pixel coordinates is. Intersection-over-union, AP50 and a precision/recall pair are taught here (see the learning objectives), as is why 64 records from one draw give no dispersion and why a self-drawn scene is a plumbing check while a held-out split of one labelled set is a measurement of that set only.",
         "- **Data contract:** records are `{id, image, boxes}` — `image` a PIL image (or a file decodable by Pillow) with sides within 16..4,096 px and `boxes` 1..200 entries `{prompt, box}`: a phrase of at most 48 characters (normalised like a query; at most 16 distinct phrases per dataset) and an `[x0, y0, x1, y1]` pixel box inside the image at least 1 px wide and tall. Ids match `[A-Za-z0-9_.:-]{1,64}` and are unique; a dataset needs 8..5,000 records; splitting de-duplicates by decoded pixels so no image lands in two splits, and `split_dataset` needs at least 12 distinct images at its default fractions (training at least 8, validation and test at least 1 each; `min_split_images()` gives the number for other fractions). BYOD accepts one zip (or folder) of images plus a `boxes.csv` in the layout named above.",
         "- **Validation is structural, not semantic:** every image is decoded and every phrase and box checked, but nothing checks that a box outlines what its phrase names — a mislabelled set is fine-tuned on without complaint.",
         "- **Privacy:** Do not upload confidential or restricted data to a hosted runtime unless you are authorized to process it there. The default path uploads nothing.",
@@ -310,7 +313,7 @@ TEMPLATE = {
         },
         {
             "md": (
-                '<details><summary>Check your reasoning</summary>Boxes in one photograph share its staining, focus and crowding, so a box-level split would put near-copies of a test cell in training. The recorded run split 260 / 40 / 64 images with no image shared (by decoded-pixel digest); a typical image holds about eleven red blood cells, one white blood cell and one platelet, so the test split has 846 reference boxes, 731 of them red blood cells. All four refusal probes were rejected before the model ran.</details>'
+                '<details><summary>Check your reasoning</summary>Boxes in one photograph share its staining, focus and crowding, so a box-level split would put near-copies of a test cell in training. The recorded run split 260 / 40 / 64 images without exact decoded-image overlap (by decoded-pixel digest); whether images from one slide, patient or source, or near-duplicates, sit in two splits is not established for BCCD; a typical image holds about eleven red blood cells, one white blood cell and one platelet, so the test split has 846 reference boxes, 731 of them red blood cells. All four refusal probes were rejected before the model ran.</details>'
             ),
         },
         {
@@ -389,13 +392,19 @@ TEMPLATE = {
             "md": (
                 "## 6. Baselines and the frozen model on the test records\n\n"
                 "Two non-adapted baselines frame the adaptation, each scored by `detection_metrics` (carried in "
-                "`metrics.py`): per phrase, the **average precision at IoU ≥ 0.5** — the detections of that phrase ranked "
-                "by score across the whole split, each reference box matched at most once, the area under the "
-                "precision–recall step curve (VOC all-points) — and their mean, **mAP@0.5**, the measure the epoch is "
-                "selected on; and, over all phrases pooled, the **precision** and **recall** of the detections the score "
+                "`metrics.py`): per phrase, the **AP50 over detections retained at score ≥ 0.1** — only the detections of that phrase that pass `THRESHOLD`, "
+                "ranked by score across the whole split; with conventional VOC matching, each detection is compared with the "
+                "reference box of its phrase it overlaps most and is a true positive only when that IoU is at least 0.5 and "
+                "the box is still free (a second detection of the same box is a false positive); the area under that "
+                "truncated precision–recall step curve (VOC all-points interpolation) — and their mean, printed as "
+                "**mAP@0.5**, the measure the epoch is selected on (compared unrounded, printed to 4 decimal places). Boxes "
+                "below the threshold never enter that curve, so the cells also print an **all-candidates AP50** over every "
+                "patch box as a display-only diagnostic; it is never used for selection; and, over all phrases pooled, the **precision** and **recall** of the detections the score "
                 "threshold let through and their F1. The **empty** baseline predicts no box and scores 0 by construction — "
                 "the floor. The **grid-prior** baseline tiles each phrase's median training box edge to edge over every "
-                "image with one constant score, what the label statistics buy without looking at the image. The **frozen "
+                "image with one constant score, what the label statistics buy without looking at the image; with every score "
+                "tied, its boxes rank in tiling order (phrase by phrase, columns left to right, top to bottom within a "
+                "column), and its AP depends on that order. The **frozen "
                 "model** is scored by `pipe.evaluate`, which detects the three phrases in every record in batches of "
                 "`EVAL_BATCH_SIZE`, keeps the boxes whose sigmoid reaches `THRESHOLD`, and scores them. Do not assume the "
                 "frozen detector's behaviour in advance: read its mAP, per-phrase APs, precision, recall, box counts and "
@@ -414,11 +423,12 @@ TEMPLATE = {
                 "print({{'empty_baseline': {{k: round(baseline_empty[k], 3) for k in METRICS}}, 'n': baseline_empty['n'], 'note': baseline_empty['baseline']}})\n"
                 "print({{'grid_baseline': {{k: round(baseline_grid[k], 3) for k in METRICS}}, 'prior_box_sizes': baseline_grid['prior_box_sizes'], 'n_predicted_boxes': baseline_grid['n_predicted_boxes'], 'note': baseline_grid['baseline']}})\n"
                 "t0 = time.perf_counter()\n"
-                "frozen_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)\n"
+                "frozen_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE, all_candidates=True)\n"
                 "if frozen_test['adapted']:\n"
                 "    raise RuntimeError('the pipeline still carries an adapter, so this would not be the frozen model: run Section 6 again')\n"
                 "print({{'frozen_model_test': {{k: round(frozen_test[k], 3) for k in METRICS}}, 'adapted': frozen_test['adapted'], 'n': frozen_test['n'], 'reference_boxes': frozen_test['n_reference_boxes'], 'predicted_boxes': frozen_test['n_predicted_boxes'], 'matched': frozen_test['n_matched'], 'verdict': frozen_test['verdict'], 'seconds': round(time.perf_counter() - t0, 1)}})\n"
                 "print({{'frozen_per_prompt': frozen_test['per_prompt']}})\n"
+                "print({{'frozen_all_candidates_ap50 (display only, not used for selection)': frozen_test['all_candidates']}})\n"
                 "print({{'definitions': frozen_test['definitions']}})\n"
                 "for row in frozen_test['rows'][:4]:\n"
                 "    print(row)"
@@ -426,7 +436,7 @@ TEMPLATE = {
         },
         {
             "md": (
-                '<details><summary>Check your reasoning</summary>Close to the floor. In the recorded run the empty baseline scored mAP@0.5 0.0, the grid prior 0.0147 and the frozen model 0.0723, with precision 0.1295 and recall 0.0591: it kept 386 boxes for 846 references and matched 50. Per phrase, only `a white blood cell` (the largest, most distinctive cell) had a non-zero AP, 0.2168; platelets and red blood cells scored 0.0.</details>'
+                '<details><summary>Check your reasoning</summary>Close to the floor. In the recorded run the empty baseline scored mAP@0.5 0.0, the grid prior 0.0147 and the frozen model 0.0723, with precision 0.1295 and recall 0.0591: it kept 386 boxes for 846 references and matched 50. Per phrase, only `a white blood cell` (the largest, most distinctive cell) had a non-zero AP, 0.2168; platelets and red blood cells scored 0.0. These are AP50 over detections retained at score ≥ 0.1; the recorded run predates the all-candidates diagnostic, which in a local CPU measurement (16 October 2026, not a hosted run) was 0.0845 for the frozen model against 0.0723 at the cut-off — still near the floor.</details>'
             ),
         },
         {
@@ -435,16 +445,17 @@ TEMPLATE = {
                 "`pipe.adapt` trains only the two detection heads — the class head (a 768 → 512 projection with a learned "
                 "logit shift and scale) and the box head (a three-layer MLP): 1,579,526 of 154,966,792 parameters — while "
                 "the CLIP image and text towers, the post-merge layer norm and the objectness head stay frozen, the split the "
-                "upstream authors trained with. The loss is the **DETR-style matched loss** the OWL-ViT heads were trained "
-                "with: each reference box is assigned to one of the 3,600 patch candidates by **Hungarian matching** under a "
+                "tutorial keeps fixed. The loss is a **DETR-style matched objective** of the kind OWL-ViT's heads were "
+                "trained with (this notebook does not verify it against the upstream training code): each reference box is assigned to one of the 3,600 patch candidates by **Hungarian matching** under a "
                 "cost of focal classification, L1 and generalised-IoU terms, then the **sigmoid focal loss** is taken over "
                 "every (patch, phrase) logit with the matched pairs as positives, and **L1 and GIoU** over the matched boxes, "
                 "all normalised by the number of reference boxes. Because the towers are frozen, their outputs — the "
                 "60 × 60 × 768 feature map per image and the three phrase embeddings — are computed once under no gradient "
                 "and cached in half precision (float16) on the host (the **frozen-tower cache**), and each step runs only the "
-                "heads on those cached features, so the training logits equal the full model's to within float16 rounding "
-                "(a local CPU measurement on this split, 16 October 2026: largest logit difference 0.047, and the same epoch "
-                "was kept as with a float32 cache). AdamW without weight decay at a fixed learning "
+                "heads on those cached features: the heads train on float16-quantized frozen features (promoted to the "
+                "head dtype), which approximates training on freshly computed float32 features. With the frozen heads held "
+                "fixed, quantizing the features moved the logits by at most 0.047 (a fixed-weight comparison, local CPU "
+                "measurement on this split, 16 October 2026); the training comparison is in Section 8. AdamW without weight decay at a fixed learning "
                 "rate, gradient clipping at 1.0, seeded shuffling, no scheduler, no augmentation. Epoch 0 records the frozen "
                 "model's validation rates; every epoch is scored on the 40 validation records at `THRESHOLD`, and the epoch "
                 "with the **highest validation mAP** (the earliest on ties) is kept.\n\n"
@@ -487,24 +498,26 @@ TEMPLATE = {
         {
             "md": (
                 "## 8. Held-out evaluation\n\n"
-                "The test records were never used for training or epoch selection, and no image appears in two splits. The "
+                "The test records were never used for training or epoch selection, and no decoded image appears in two splits. The "
                 "adapted model is scored exactly as the frozen model was in Section 6 and the four systems are put side by "
                 "side. Read it in this order: **mAP@0.5** first (the measure the epoch was selected on), then the "
-                "**per-phrase APs**, then **precision** and **recall** together — a gain in one at the cost of the "
-                "other is a moved threshold, not a better detector), then the number of predicted boxes against the "
-                "reference count. The cell reports (in `verdicts`, without stopping a BYOD run before export) whether the adapted mAP "
-                "is at least the frozen one and above the grid-prior baseline. Sixty-four records from one seeded split give **no dispersion estimate**; the deltas are "
+                "**per-phrase APs**, then **precision** and **recall** together — one precision/recall pair is one operating point, and the same "
+                "numeric threshold need not be a comparable operating point before and after training, because training "
+                "moves the scores — then the number of predicted boxes against the reference count, and last the "
+                "display-only all-candidates AP50. The cell reports (in `verdicts`, without stopping a BYOD run before export) whether the adapted mAP "
+                "is at least the frozen one and outperforms this training-derived grid prior. Sixty-four records from one seeded split give **no dispersion estimate**; the deltas are "
                 "sample-sanity evidence that the adaptation contract works, not a benchmark, and a result on one "
                 "blood-smear set's three cell types says nothing about other phrases, other images or your data until you "
                 "measure them."
                 "\n\n**Predict before running:** will the adapted model's precision and recall rise together? Will it predict more or fewer boxes than there are reference boxes?"
             ),
             "code": (
-                "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)\n"
+                "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE, all_candidates=True)\n"
                 "adapted_val = pipe.evaluate(val_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)\n"
                 "comparison = {{metric: {{'empty': round(baseline_empty[metric], 3), 'grid': round(baseline_grid[metric], 3), 'frozen': round(frozen_test[metric], 3), 'adapted': round(adapted_test[metric], 3)}} for metric in METRICS}}\n"
                 "comparison['delta_vs_frozen'] = {{metric: round(adapted_test[metric] - frozen_test[metric], 3) for metric in METRICS}}\n"
                 "comparison['per_prompt_ap'] = {{p: {{'frozen': frozen_test['per_prompt'][p]['ap'], 'adapted': adapted_test['per_prompt'][p]['ap'], 'n_reference': adapted_test['per_prompt'][p]['n_reference']}} for p in PROMPTS}}\n"
+                "comparison['all_candidates_ap50_display_only'] = {{'frozen': frozen_test['all_candidates']['map50'], 'adapted': adapted_test['all_candidates']['map50']}}\n"
                 "comparison['boxes'] = {{'reference': adapted_test['n_reference_boxes'], 'frozen_predicted': frozen_test['n_predicted_boxes'], 'adapted_predicted': adapted_test['n_predicted_boxes'], 'frozen_matched': frozen_test['n_matched'], 'adapted_matched': adapted_test['n_matched']}}\n"
                 "for key, row in comparison.items():\n"
                 "    print({{key: row}})\n"
@@ -537,7 +550,7 @@ TEMPLATE = {
         },
         {
             "md": (
-                '<details><summary>Check your reasoning</summary>Not together. In the recorded run mAP@0.5 rose from 0.0723 to 0.8918, recall from 0.0591 to 0.9894, but precision only from 0.1295 to 0.2236: the adapted model kept 3,744 boxes for 846 references (837 matched), so most kept boxes are duplicates — there is no non-maximum suppression and the threshold stayed at 0.1. mAP ranks by score and is barely hurt by low-scoring duplicates; precision at one threshold is. Per phrase: platelet 0.0 → 0.8805, red blood cell 0.0 → 0.8476, white blood cell 0.2168 → 0.9473. The verdict line records the comparison instead of stopping the notebook. Your counts may differ: precision and kept-box counts at the 0.1 threshold move with the device and numeric path. In a local CPU measurement of the same code (16 October 2026, not a hosted run) the adapted model kept 2,974 boxes at precision 0.279 with test mAP@0.5 0.8914 and epoch 8 kept; with the frozen-tower cache in float32 instead of float16 it scored 0.8885 and kept the same epoch.</details>'
+                '<details><summary>Check your reasoning</summary>Both rose, but precision remained low. In the recorded run mAP@0.5 rose from 0.0723 to 0.8918, recall from 0.0591 to 0.9894, and precision from 0.1295 to only 0.2236: the adapted model kept 3,744 boxes for 846 references (837 matched), so 2,907 kept boxes matched no reference. Duplicates of cells already found are a plausible contributor — there is no non-maximum suppression and the threshold stayed at 0.1 — but this run does not show what share they are. What low-scoring false positives cost AP depends on where they rank: below the last true positive they cost nothing, interleaved with true positives they lower the curve; precision at one threshold counts them all. Per phrase: platelet 0.0 → 0.8805, red blood cell 0.0 → 0.8476, white blood cell 0.2168 → 0.9473. The verdict line records the comparison instead of stopping the notebook. Your counts may differ: in the reported runs, precision and kept-box counts at the 0.1 threshold moved with the device and numeric path more than AP50 did. Local CPU measurements of the same code (16 October 2026, not hosted runs): trained on the float16 cache, the adapted model kept 2,974 boxes at precision 0.279 with test AP50 0.8914; trained on a float32 cache instead, precision 0.333 and test AP50 0.8885; both kept epoch 8. Those runs and the recorded run scored with the earlier greedy best-unmatched matcher; on CPU, switching to the conventional VOC matching used now moved the adapted test AP50 from 0.8914 to 0.8909 and left the frozen 0.0723 unchanged. The all-candidates diagnostic for the adapted model was 0.8935 on CPU.</details>'
             ),
         },
         {
@@ -556,8 +569,9 @@ TEMPLATE = {
                 "history (OUT8). `Owlv2DetectionPipeline.from_artifact` re-verifies the base snapshot, checks the artifact "
                 "manifest, its digest and its exact tensor set **before** deserialising, refuses any tensor outside the two "
                 "heads, and overlays the tensors onto a freshly loaded base — a new object from files, not the in-memory "
-                "model (VER2). The cell asserts identical detections on eight test records (VER4)."
-                '\n\n**Predict before running:** the reloaded pipeline is rebuilt from the adapter file and the pinned base. Will its detections on eight test records match exactly?'
+                "model (VER2). The cell asserts **detection parity at reported precision** on eight test records (VER4): the "
+                "same labels, scores equal to 4 decimal places and box coordinates to 1 decimal place."
+                '\n\n**Predict before running:** the reloaded pipeline is rebuilt from the adapter file and the pinned base. Will its detections on eight test records match at that precision?'
             ),
             "code": (
                 "import shutil\n\n"
@@ -588,7 +602,7 @@ TEMPLATE = {
                 "after = reloaded.detect_batch([r['image'] for r in test_records[:8]], PROMPTS, threshold=THRESHOLD)\n"
                 "\n\ndef same(dets):\n"
                 "    return [(d['label'], round(d['score'], 4), tuple(round(v, 1) for v in d['box'])) for d in dets]\n\n\n"
-                "parity ={{'identical_detections': sum(bool(same(a) == same(b)) for a, b in zip(before, after, strict=True)), 'of': len(before)}}\n"
+                "parity ={{'compared_at': 'label, score to 4 dp, box to 1 dp', 'identical_detections': sum(bool(same(a) == same(b)) for a, b in zip(before, after, strict=True)), 'of': len(before)}}\n"
                 "print({{'reload_parity': parity, 'reloaded_best_epoch': reloaded.adapter['best_epoch']}})\n"
                 "assert parity['identical_detections'] == parity['of']\n\n"
                 "result_payload = {{\n"
@@ -617,7 +631,7 @@ TEMPLATE = {
         },
         {
             "md": (
-                '<details><summary>Check your reasoning</summary>Yes: the recorded run reported 8 of 8 identical detections, and the adapter was 6,319,224 bytes. The drawn scene after adaptation is qualitative only — the heads were tuned on cells, so expect different scores on shapes they were never shown.</details>'
+                '<details><summary>Check your reasoning</summary>Yes: the recorded run reported parity on 8 of 8 records at that precision (scores to 4 decimal places, coordinates to 1), and the adapter was 6,319,224 bytes. The drawn scene after adaptation is qualitative only — the heads were tuned on cells, so expect different scores on shapes they were never shown.</details>'
             ),
         },
     ],
@@ -636,16 +650,20 @@ TEMPLATE = {
         "serve every phrase: the drawn scene re-detected in Section 9 is one drawing of evidence about what the tuning did "
         "outside its vocabulary, not a measurement, and a deployment that detects other phrases must "
         "measure them after adapting. The towers were not adapted: what the image encoder cannot see stays undetected, "
-        "**the scores remain an uncalibrated sigmoid**, and there is still no non-maximum suppression.\n\n"
+        "**the scores remain an uncalibrated sigmoid**, and there is still no non-maximum suppression. What was "
+        "measured is **supervised adaptation to three fixed phrases**, not retained open-vocabulary ability, and AP50 "
+        "is a box-matching score: it is not a cell count, a differential count or evidence of clinical validity.\n\n"
         "Three things to carry to real data. **Baselines first:** the empty and grid-prior rates on *your* boxes, and the "
-        "frozen model's box count, are the numbers to read before any adapted one. **Precision and recall together:** a "
-        "gain in mAP that comes with a collapse of one of them is a moved threshold, and the threshold is yours to set on "
-        "a validation split, not the test split. **Leakage:** keep every image in one split (the contract de-duplicates by "
-        "decoded pixels) and split by source, session or slide when your images come from few sources.\n\n"
+        "frozen model's box count, are the numbers to read before any adapted one. **Precision and recall together:** "
+        "one pair is one operating point, and the same numeric threshold need not be comparable before and after "
+        "training; choose the operating point on a validation split, not the test split. **Leakage:** the contract only "
+        "guarantees splits without exact decoded-image overlap (it de-duplicates by decoded pixels); slide, patient and "
+        "source independence and near-duplicates are not established for BCCD, so split by source, session or slide "
+        "when you know them.\n\n"
         "Successful execution proves that the recorded repository revision's package, carried in this standalone notebook, "
         "can acquire and digest-verify the pinned model snapshot, fetch and digest-verify a real labelled box set, validate "
         "the demonstrated dataset contract without leakage, execute the inference contract for a drawn scene and a bounded "
-        "fine-tuning of the heads with the upstream objective, evaluate against two non-adapted baselines and the frozen "
+        "fine-tuning of the heads with a DETR-style matched objective, evaluate against two non-adapted baselines and the frozen "
         "model on an image-disjoint split, and emit the shown machine-readable artifacts — without the repository being "
         "reachable. It does **not** establish benchmark superiority, detection quality on any other phrase vocabulary or "
         "image family, calibration of the sigmoid, or production fitness.\n\n"
@@ -654,7 +672,10 @@ TEMPLATE = {
         "field in Section 7 and run Sections 6–9 again); change `THRESHOLD` (it is set in the Section 5 cell) to `0.05` or "
         "`0.3` and run Sections 5–9 again to read how precision and recall trade against each other for both the frozen and "
         "the adapted model; change `SPLIT_SEED` in Section 4 and run Sections 4–9 again to read how much 64 records move; "
-        "or bring your own boxes through BYOD (Sections 4–9) and read the two baselines before the adapted number. Each "
+        "or bring your own boxes through BYOD (Sections 4–9) and read the two baselines before the adapted number. Compare "
+        "settings on the validation numbers (`adapted_val` and the epoch history): the test split was scored once on the "
+        "default path, and every further look at it is exploratory, not a new held-out result. If you try several "
+        "`SPLIT_SEED` values, report them collectively (all of them, or their range), not the best one. Each "
         "re-run starts from the frozen heads: Section 6 resets `pipe` and prints `reset_to_frozen_heads`, and the frozen "
         "row it prints carries `'adapted': False`. To return to the defaults, restore the field and run the same range again.\n\n"
         '## Troubleshooting\n\n'
@@ -673,15 +694,15 @@ TEMPLATE = {
         '- **Open-vocabulary detection** — detecting objects named by free-text phrases rather than a fixed class list.\n'
         '- **Patch / box head / class head** — the image is cut into 3,600 patches; the box head predicts one box per patch and the class head scores it against each phrase.\n'
         '- **Sigmoid score / threshold** — each (patch, phrase) logit squashed into 0..1 on its own; boxes whose score reaches the caller-owned `THRESHOLD` are kept. Not a calibrated probability.\n'
-        '- **Non-maximum suppression** — merging overlapping boxes; OWLv2 here applies none, so duplicates are possible.\n'
+        '- **Non-maximum suppression** — suppressing lower-scoring boxes that overlap a higher-scoring box (usually of the same label); OWLv2 here applies none, so duplicates are possible.\n'
         '- **IoU** — intersection over union of two boxes; a detection matches a reference box at IoU ≥ 0.5.\n'
-        "- **AP / mAP@0.5** — the area under one phrase's precision–recall curve; their mean over phrases.\n"
+        "- **AP50 / mAP@0.5** — the area under one phrase's precision–recall curve at IoU ≥ 0.5, here over the detections retained at score ≥ 0.1 (VOC matching); their mean over phrases. The all-candidates AP50 uses every patch box and is display-only.\n"
         '- **Precision / recall / F1** — share of kept boxes that match; share of reference boxes found; their harmonic mean.\n'
         "- **Empty / grid-prior baseline** — predicting no box; tiling each phrase's median training box over the image.\n"
         '- **Hungarian matching / focal, L1, GIoU loss** — the one-to-one assignment of reference boxes to patches, and the classification and box terms trained on it.\n'
         '- **Frozen-tower cache** — the frozen image and text tower outputs computed once, so training runs only the heads.\n'
-        '- **Epoch / validation selection** — one pass over the training records; keeping the epoch with the highest validation mAP.\n'
-        '- **Adapter / reload parity** — the two trained heads only, overlaid on the pinned base; the reloaded model gives the same detections.\n'
+        '- **Epoch / validation selection** — one pass over the training records; keeping the epoch with the highest unrounded validation mAP.\n'
+        '- **Adapter / reload parity** — the two trained heads only, overlaid on the pinned base; the reloaded model gives the same detections at reported precision (scores to 4 dp, boxes to 1 dp).\n'
         '- **Isolated environment** — the separate Python 3.12.12 environment Section 1 builds from the hash lock; every later cell runs there.\n'
         '- **BYOD** — bring your own data: your images and boxes through the same cells.\n\n'
         '## Conclusion (your notes)\n\nOptional — fill in from **your** run:\n\n'

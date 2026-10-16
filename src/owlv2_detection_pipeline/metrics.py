@@ -15,8 +15,10 @@ from .pipeline import box_iou
 IOU_THRESHOLD = 0.5
 
 METRIC_DEFINITIONS = {
-    "map50": "mean over the phrases with at least one reference box of the per-phrase average precision at IoU >= iou_threshold (VOC all-points interpolation over the detections ranked by score across the whole set; a reference box is matched at most once, by the highest-scoring detection of its phrase that overlaps it enough)",
-    "ap": "per-phrase average precision at IoU >= iou_threshold",
+    "map50": "mean over the phrases with at least one reference box of the per-phrase AP50 over detections retained at the score threshold: average precision at IoU >= iou_threshold of only the detections the score threshold let through (a truncated precision-recall curve), VOC all-points interpolation over them ranked by score across the whole set; conventional VOC matching: each detection, in score order, is compared with the highest-IoU reference box of its phrase in the record; it is a true positive only when that IoU reaches the threshold and that reference is not yet taken, otherwise a false positive (a duplicate); rounded to 4 dp for display",
+    "map50_exact": "map50 before rounding; validation epoch selection compares this value",
+    "ap": "per-phrase AP50 over detections retained at the score threshold (rounded to 4 dp)",
+    "all_candidates": "display-only diagnostic (evaluate(all_candidates=True)): the same AP50 over every patch candidate with no score cut-off; never used for selection",
     "precision": "matched detections / all detections the score threshold let through (all phrases pooled)",
     "recall": "matched reference boxes / all reference boxes (all phrases pooled)",
     "f1": "harmonic mean of precision and recall",
@@ -24,22 +26,25 @@ METRIC_DEFINITIONS = {
 
 
 def _match(predictions: Sequence[Mapping[str, Any]], references: Sequence[Mapping[str, Any]], iou_threshold: float) -> list[tuple[float, str, bool]]:
-    """Greedy matching in score order within one record: (score, phrase, matched) per prediction; a reference
-    box is consumed by the first (highest-scoring) prediction of its phrase that reaches the IoU threshold."""
+    """Conventional VOC matching in score order within one record: (score, phrase, matched) per prediction. Each
+    prediction looks only at the reference box of its phrase with the highest IoU; it matches when that IoU reaches
+    the threshold and the reference is still free, and is otherwise a false positive (a duplicate when the
+    reference is taken) — it does not fall back to a less-overlapping free reference."""
     ordered = sorted(predictions, key=lambda p: -float(p["score"]))
     taken = [False] * len(references)
     out = []
     for pred in ordered:
-        best, best_iou = None, iou_threshold
+        best, best_iou = None, -1.0
         for k, ref in enumerate(references):
-            if taken[k] or ref["prompt"] != pred["label"]:
+            if ref["prompt"] != pred["label"]:
                 continue
             iou = box_iou(pred["box"], ref["box"])
-            if iou >= best_iou:
+            if iou > best_iou:
                 best, best_iou = k, iou
-        if best is not None:
+        hit = best is not None and best_iou >= iou_threshold and not taken[best]
+        if hit:
             taken[best] = True
-        out.append((float(pred["score"]), str(pred["label"]), best is not None))
+        out.append((float(pred["score"]), str(pred["label"]), hit))
     return out
 
 
@@ -95,10 +100,13 @@ def detection_metrics(
         total_ref += len(refs)
     phrases = sorted(set(n_reference) | set(per_phrase))
     per_prompt = {}
+    exact_aps = []
     for phrase in phrases:
         n_ref = n_reference.get(phrase, 0)
         matches = per_phrase.get(phrase, [])
         hits = sum(1 for _s, h in matches if h)
+        if n_ref:
+            exact_aps.append(average_precision(matches, n_ref))
         per_prompt[phrase] = {
             "ap": round(average_precision(matches, n_ref), 4) if n_ref else None,
             "n_reference": n_ref,
@@ -117,6 +125,7 @@ def detection_metrics(
         "n_matched": total_tp,
         "iou_threshold": float(iou_threshold),
         "map50": round(statistics.fmean(aps), 4) if aps else 0.0,
+        "map50_exact": float(statistics.fmean(exact_aps)) if exact_aps else 0.0,
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),
@@ -137,8 +146,10 @@ def grid_baseline(
     records: Sequence[Mapping[str, Any]], reference: Sequence[Mapping[str, Any]], *, iou_threshold: float = IOU_THRESHOLD
 ) -> dict[str, Any]:
     """A spatial prior with no image content: for each phrase the median box size in `reference` (the training
-    records) tiled edge to edge over every image, all with the same score. Beating it shows the detector reads the
-    image rather than the label statistics."""
+    records) tiled edge to edge over every image, all with the same score. Ties keep the tiling order (stable sort):
+    phrase by phrase in the order the training records first use them, columns left to right, and top to bottom
+    within a column. Outperforming this training-derived prior shows the detector reads the image rather than the
+    label statistics alone."""
     sizes: dict[str, list[tuple[float, float]]] = {}
     for record in reference:
         for b in record["boxes"]:
