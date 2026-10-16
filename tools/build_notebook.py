@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 GENERATOR_VERSION = "build_notebook.py/2.2"
-NOTEBOOK_SPEC = "2.2"
+NOTEBOOK_SPEC = "2.5"
 
 # ST2: default rewrite rule; a template may replace it with its own `rewrites` list. Every rule must
 # match exactly once across the embedded modules, so a silent no-op is impossible.
@@ -316,6 +316,10 @@ while True:
         _send.send(("done",))
     except BaseException as exc:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if getattr(exc, "dimer_refusal", False):
+            # A refused user input (DAT20): one actionable message, no traceback; genuine failures keep theirs.
+            _send.send(("refusal", str(exc)))
+            continue
         frames = exc.__traceback__.tb_next if exc.__traceback__ is not None else None
         _send.send(("error", "".join(traceback.format_exception(type(exc), exc, frames)), f"{type(exc).__name__}: {exc}"))
 """
@@ -323,6 +327,13 @@ while True:
 
 class IsolatedCellError(RuntimeError):
     """A routed cell raised inside the isolated environment; its traceback is printed above."""
+
+
+class IsolatedCellRefusal(Exception):
+    """A routed cell refused a user input (for example a BYOD upload); shown as its message alone, with no traceback."""
+
+    def _render_traceback_(self):
+        return [str(self)]
 
 
 class IsolatedRuntime:
@@ -379,6 +390,8 @@ class IsolatedRuntime:
                 self._display(message[1], raw=True)
             elif kind == "upload":
                 self._send.send(("upload", self._colab_upload()))
+            elif kind == "refusal":
+                raise IsolatedCellRefusal(message[1]) from None
             elif kind == "error":
                 sys.stderr.write(message[1])
                 raise IsolatedCellError(message[2]) from None
@@ -847,9 +860,11 @@ def render(repo: Path, template: dict[str, Any], revision: str | None = None) ->
     )
     header = (
         f"# {template['title']}\n\n{badges}\n\n"
-        f"**Profile:** `{template['profile']}`  \n"
+        + (f"{template['use_notice'].strip()}\n\n" if template.get("use_notice") else "")
+        + f"**Profile:** `{template['profile']}`  \n"
         f"**Mode:** `{mode}`  \n"
-        f"**Notebook specification:** DIMER Notebook Specification {NOTEBOOK_SPEC} — **standalone** (§4)  \n"
+        + (f"**Kind:** `{template['notebook_kind']}`  \n" if template.get("notebook_kind") else "")
+        + f"**Notebook specification:** DIMER Notebook Specification {NOTEBOOK_SPEC} — **standalone** (§4)  \n"
         f"**Capability:** {template['capability']}\n\n"
         f"**This notebook is standalone.** It carries {carried}, the pinned model identity and the per-file SHA-256 manifest in Section 3, "
         f"and the exact runtime pins in Section 1, so it keeps working after export even if the repository changes or disappears. Its only "
@@ -913,7 +928,9 @@ def render(repo: Path, template: dict[str, Any], revision: str | None = None) ->
                 + "Hosted runtimes such as Colab and Kaggle import some packages, NumPy and often PyTorch among them, before the "
                 "first cell runs, and Python cannot swap a module that is already loaded. Installing the pins into the notebook's "
                 "own Python would therefore leave mixed versions or require a manual restart. Instead, the next cell builds a "
-                f"separate environment (`dimer_isolated_env_<lock digest>/`) and leaves the kernel's packages untouched: it "
+                f"separate environment (`dimer_isolated_env_<lock digest>/` in the working directory; set the environment "
+                "variable `DIMER_ISOLATED_ENV` before the run to build it at another path) and leaves the kernel's packages "
+                "untouched: it "
                 f"downloads the pinned `uv` {template['uv']['version']} wheel and refuses it unless its size and SHA-256 match, has "
                 f"`uv` install the managed CPython **{template['managed_python']}** (whatever Python the kernel itself runs), and "
                 f"installs the {n_locked} packages of the carried hash-locked requirements (`{template['lock']}`, compiled from the "
@@ -1065,6 +1082,7 @@ def render(repo: Path, template: dict[str, Any], revision: str | None = None) ->
                 "notebook_profile": template["profile"],
                 "notebook_mode": mode,
                 "notebook_spec": NOTEBOOK_SPEC,
+                **({"notebook_kind": template["notebook_kind"]} if template.get("notebook_kind") else {}),
                 "standalone": True,
                 **({"environment": "isolated hash-locked uv environment; nothing installed into the kernel"} if isolated else {}),
                 "generated_from": {

@@ -790,7 +790,7 @@ class Owlv2DetectionPipeline:
         DETR-style matched loss the upstream detection heads were trained with (Hungarian matching; sigmoid focal
         classification, L1 and GIoU box terms). The frozen image tower is run once per record under no gradient and
         its feature maps cached (half precision on the host), the frozen text tower once per phrase, so each step
-        runs only the heads; the logits equal the full model's. AdamW (no weight decay), gradient clipping at
+        runs only the heads; the logits equal the full model's to within float16 rounding. AdamW (no weight decay), gradient clipping at
         `GRAD_CLIP`, seeded shuffling, no scheduler, no augmentation. Every call starts from the frozen heads captured
         at load (a previous adapter is discarded first), so epoch 0 records the frozen model's validation rates at
         `threshold` even on a re-run; the epoch with the highest validation mAP@`iou_threshold` (the earliest on

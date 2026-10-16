@@ -3,7 +3,7 @@
 `tutorials/owlv2_detection_colab.ipynb` (`E2E`, **standalone** carrier) is **Candidate**: the
 blob recorded below needed a manual restart after its install cell, and the current blob (isolated
 uv environment, review fixes) blob `a545a73b74136ea3` (commit `cbb9f81`) completed one pass with no restart and 0 errors on a fresh Colab Tesla T4 on 2026-10-08 (Colab CLI 0.7.4 sequential execution, 12/12 code cells, 598.8 s wall; held-out test mAP50 adapted 0.8918 / frozen 0.0723 / grid prior 0.0147, reload parity 8/8); the REL12 BYOD exercise has not been run on a hosted runtime. Source validation, unit tests, generator parity, and the historical inference-only
-run are not model-backed evidence for this E2E carrier under DIMER Notebook Specification 2.2.
+run are not model-backed evidence for this E2E carrier under DIMER Notebook Specification 2.5.
 
 ## Automatic coverage (static, every pull request)
 
@@ -11,7 +11,7 @@ CI and `tools/validate_release_assets.py` verify that:
 
 - the notebook JSON parses, code cells compile, outputs and execution counts are absent, and
   unresolved placeholders are rejected;
-- the notebook declares `E2E`, `GUIDED`, Notebook Specification 2.2, and `standalone: true`;
+- the notebook declares `E2E`, `GUIDED`, Notebook Specification 2.5, and `standalone: true`;
 - the primary path performs no repository clone/install/import and embeds `metrics.py`,
   `samples.py`, and `pipeline.py` in dependency order with source SHA-256 parity;
 - the inline model manifest and runtime pins match the repository and the generated notebook is
@@ -93,7 +93,10 @@ downloads.
 ## Current status
 
 **Candidate.** The current blob replaces the in-kernel install with an isolated hash-locked uv
-environment and carries the 2026-10-02 review fixes (OWD-*); it needs its own exact-blob run, and a
+environment and carries the 2026-10-02 review fixes (OWD-*) and the 2026-10-16 review fixes (OWL-*: spec 2.5
+migration, use notice, DAT9 overlap statement, run labels, one-message BYOD refusals; text and refusal
+handling only, default-path computation unchanged). Blob `a545a73b` ran on 2026-10-08 (above); the regenerated
+blob needs its own exact-blob run before promotion, and a
 BYOD acceptance run plus one rejected input (REL12) are not yet recorded. For the previous blob
 (commit `a772a31` / notebook blob `c9cd132564ae`) the
 default sample path executed on Kaggle Tesla T4 after a manual restart after the install cell, with the other gates in the procedure above

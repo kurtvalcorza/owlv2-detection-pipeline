@@ -1,4 +1,4 @@
-"""Per-repository template for tools/build_notebook.py (NOTEBOOK_SPEC 2.2 §4 standalone carrier).
+"""Per-repository template for tools/build_notebook.py (NOTEBOOK_SPEC 2.5 §4 standalone carrier).
 
 Only the task-specific prose and stage cells live here. Runtime install, the embedded package (three modules,
 carried verbatim in dependency order), and the model pin/stage/verify cells are produced by the generator from
@@ -41,6 +41,22 @@ TEMPLATE = {
     "modules": ["pipeline.py", "metrics.py", "samples.py"],
     "runtime_imports": ["torch", "transformers", "PIL", "pyarrow", "scipy"],
     "title": "OWLv2 base/16 ensemble — DIMER E2E open-vocabulary detection adaptation tutorial (standalone)",
+    # NOTEBOOK_SPEC 2.5 KND1 and DOC17-DOC21 (review OWL-m3, 2026-10-16): the kind and the canonical use notice,
+    # with the DOC19 clause for the medical-imaging-adjacent domain (blood-smear microscopy).
+    "notebook_kind": "TUTORIAL",
+    "use_notice": (
+        "> **⚠️ Notice.** For research, training and evaluation only. Not validated for production,\n"
+        "> clinical, diagnostic or safety-critical use. Running this notebook downloads third-party\n"
+        "> model weights and datasets under their own licenses (see the model card) and uses compute\n"
+        "> on your own Colab or Kaggle account. Data you bring stays in your runtime, and you are\n"
+        "> responsible for having the right to use it. Results here are tutorial evidence, not\n"
+        "> benchmarks. Everything is provided \"as is\", without warranty of any kind. To the maximum\n"
+        "> extent permitted by law, the maintainers and the DIMER platform accept no liability for\n"
+        "> its use.\n"
+        ">\n"
+        "> **Not a medical device.** The blood-smear photographs are teaching data. Neither the model nor an\n"
+        "> adapter trained here is a medical device, and neither is for diagnosis, screening or any clinical decision."
+    ),
     "badges": [
         (
             "GitHub",
@@ -77,9 +93,9 @@ TEMPLATE = {
         "selection, scores the held-out records again, re-runs six held-out records and the drawn scene with the adapted "
         "model, exports the adapter as safetensors with a manifest, and reloads that artifact into a fresh pipeline to verify "
         "detection parity. The default path needs no repository clone, no DIMER worker or service, no credential, no upload "
-        "dialog and no configuration edit (NOTEBOOK_SPEC 2.2 §5). A CUDA runtime is used automatically when present. "
-        "A Kaggle Tesla T4 run of the previous notebook version (same model stages) is recorded in `docs/release-verification.md`; "
-        "this version still needs its own clean-runtime run."
+        "dialog and no configuration edit (NOTEBOOK_SPEC 2.5 §5). A CUDA runtime is used automatically when present. "
+        "Hosted clean-runtime runs are recorded, by notebook blob, in `docs/release-verification.md`; a revision of this "
+        "notebook counts as verified only once a run of that exact blob is listed there."
     ),
     "byod": (
         "After the tutorial workflow completes, set `USE_BYOD = True` and `BYOD_PATH` (a zip or a folder already in the runtime, such as an attached Kaggle dataset; on Colab an empty path opens an upload dialog) in Section 4 and re-run from that cell to supply one zip "
@@ -89,7 +105,7 @@ TEMPLATE = {
         "files stay inside this runtime. BYOD is optional and never part of the default path."
     ),
     "intro": (
-        "OWLv2 is a CLIP ViT-B/16 image tower and a CLIP text tower joined by two small heads: the image is padded to a "
+        "OWLv2 [1], [2] is a CLIP ViT-B/16 image tower and a CLIP text tower joined by two small heads: the image is padded to a "
         "square, resized to 960 × 960 and split into 60 × 60 = 3,600 patches, each of which the **box head** (a three-layer "
         "MLP with a per-patch position bias) turns into one box and the **class head** (a projection plus a learned logit "
         "shift and scale) scores against every phrase embedding; a patch's box survives when the **sigmoid** of its best "
@@ -98,8 +114,12 @@ TEMPLATE = {
         "suppression**, and **the threshold is a caller-owned request parameter**.\n\n"
         "What this notebook adds to inference is **adaptation of the class and box heads on labelled (image, phrases, "
         "boxes) records**. The records are blood-smear microscopy photographs from BCCD, each with every platelet, red "
-        "blood cell and white blood cell boxed by hand — an image family and a vocabulary the detector never saw, so the "
-        "notebook measures the frozen model before it interprets adaptation. The question is "
+        "blood cell and white blood cell boxed by hand [5]. BCCD is not among the detection datasets the model card names (COCO and OpenImages) [3], "
+        "but the CLIP backbone was trained on image-caption data crawled from the web [3] and OWLv2 was self-trained on "
+        "web image-text pairs with machine-generated boxes (over 1B examples) [1], and these blood-smear photographs have "
+        "been public since 2017; overlap between that pretraining data and BCCD has not been audited and cannot be ruled "
+        "out, and the three phrases are ordinary English. So the notebook measures the frozen model first and treats its "
+        "score as the starting point, not as proof that the domain is new to the detector. The question is "
         "narrow and honest: does a bounded fine-tuning of "
         "the 1,579,526-parameter heads on 260 records — the towers frozen, the DETR-style matched loss the upstream heads "
         "were trained with — move the held-out **mAP**, **per-phrase AP**, **precision** and **recall** on an image-disjoint "
@@ -108,11 +128,14 @@ TEMPLATE = {
         "small labelled set.\n\n"
         "**Snapshot note:** the pinned revision ships `model.safetensors` (a 9-file manifest with the tokenizer and "
         "processor files) — no pickle is opened anywhere in this notebook. Section 3 stages and digest-verifies those files "
-        "before the processor or the model is constructed. The pipeline runs in **float32 on every device**: the adapter is "
-        "trained in float32 and overlays without a cast, and CPU, Tesla-class and consumer GPUs then run the same arithmetic."
+        "before the processor or the model is constructed. Model and adapter weights are held in **float32 on every device**: "
+        "the adapter is trained in float32 and overlays without a cast. The one exception is the training-time "
+        "frozen-tower cache (Section 7), which stores image features in float16 to halve host memory. CPUs and different "
+        "GPUs do not run bit-identical arithmetic, so precision and kept-box counts at the score threshold vary across "
+        "devices and numeric paths, while mAP agrees closely (Section 8 gives the measured spread)."
     ),
     "guided": {"opening": [(
-        "**Who this notebook is for.** A learner who knows basic Python, has used Colab or Jupyter and has met bounding boxes, and wants to see how an open-vocabulary detector finds objects from free-text phrases, how to score detections honestly against baselines, and how to adapt its heads to a new image family without fooling themselves. The audience is students and practitioners preparing their own labelled boxes; no prior experience with OWLv2, CLIP or fine-tuning is assumed — each term is explained where it first matters and again in the **Glossary**. A T4 GPU runtime is strongly recommended (the image tower runs at 960 × 960); CPU works but is slow.\n\n**Input → Model → Output.**\n\n| | Open-vocabulary detection | Bounded head fine-tuning |\n|---|---|---|\n| Input | one image and 1–16 free-text phrases | labelled records `{{id, image, boxes}}`: 364 public-domain BCCD blood-smear photographs with 4,886 cell boxes (260 train, 40 validation, 64 test) or your own zip |\n| Model | OWLv2: CLIP image and text towers, a box head and a class head over 3,600 patches; a box survives when its sigmoid score reaches the threshold (no non-maximum suppression) | the same model with only the class and box heads trained (1,579,526 parameters) on cached frozen-tower features, Hungarian-matched focal + L1 + GIoU loss |\n| Output | score-ordered boxes, each labelled with the phrase it matched | held-out mAP@0.5, per-phrase AP, precision and recall beside an empty and a grid-prior baseline, and a 6.3 MB safetensors adapter that reloads with identical detections |\n\n**How to use this notebook.** Choose **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**. Run all completes in one pass: Section 1 installs nothing into the notebook's own Python, so no restart is needed (the recorded hosted run of the previous version needed one; this version removes it). Sections 1–3 are **infrastructure** — the isolated environment, the carried package and the verified snapshot — and their cells are collapsed; you may run them without studying them. The learning path starts in Section 4. Form fields (`# @param`) are the only values meant to be edited, and the defaults reproduce the recorded run. Before each principal result the notebook asks you to **Predict**; after it comes a collapsible **Check your reasoning** with a worked answer from the recorded Kaggle T4 run of 25 September 2026. **Troubleshooting**, a **Glossary** and a **Conclusion** template are at the end. Writing your predictions down is optional.\n\n**Roadmap:** 1–3 infrastructure → 4 BCCD records, phrases and an image-disjoint split *(evaluation practice)* → 5 the inference contract on drawn shapes *(core concept: sigmoid scores, caller-owned threshold)* → 6 two baselines and the frozen model *(evaluation practice)* → 7 bounded fine-tuning of the heads *(core concept: what is trained)* → 8 held-out evaluation → 9 the boxes by eye, the drawn scene again, export and reload *(engineering)* → conclude."
+        "**Who this notebook is for.** A learner who knows basic Python, has used Colab or Jupyter and has met bounding boxes, and wants to see how an open-vocabulary detector finds objects from free-text phrases, how to score detections honestly against baselines, and how to adapt its heads to a new image family without fooling themselves. The audience is students and practitioners preparing their own labelled boxes; no prior experience with OWLv2, CLIP or fine-tuning is assumed — each term is explained where it first matters and again in the **Glossary**. A T4 GPU runtime is strongly recommended (the image tower runs at 960 × 960); CPU works but is slow.\n\n**Input → Model → Output.**\n\n| | Open-vocabulary detection | Bounded head fine-tuning |\n|---|---|---|\n| Input | one image and 1–16 free-text phrases | labelled records `{{id, image, boxes}}`: 364 public-domain BCCD blood-smear photographs with 4,886 cell boxes (260 train, 40 validation, 64 test) or your own zip |\n| Model | OWLv2: CLIP image and text towers, a box head and a class head over 3,600 patches; a box survives when its sigmoid score reaches the threshold (no non-maximum suppression) | the same model with only the class and box heads trained (1,579,526 parameters) on cached frozen-tower features, Hungarian-matched focal + L1 + GIoU loss |\n| Output | score-ordered boxes, each labelled with the phrase it matched | held-out mAP@0.5, per-phrase AP, precision and recall beside an empty and a grid-prior baseline, and a 6.3 MB safetensors adapter that reloads with identical detections |\n\n**How to use this notebook.** Choose **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**. Run all completes in one pass: Section 1 installs nothing into the notebook's own Python, so no restart is needed. Sections 1–3 are **infrastructure** — the isolated environment, the carried package and the verified snapshot — and their cells are collapsed; you may run them without studying them. The learning path starts in Section 4. Form fields (`# @param`) are the only values meant to be edited, and the defaults are the recorded run's settings. Before each principal result the notebook asks you to **Predict**; after it comes a collapsible **Check your reasoning** with a worked answer from **the recorded run**: the Colab Tesla T4 run of 8 October 2026 of notebook blob `a545a73b` (commit `cbb9f81`), listed in `docs/release-verification.md` [6]. That run used the same default-path computation as this revision; on a CPU or another GPU, expect precision and box counts to differ (Section 8). **Troubleshooting**, a **Glossary** and a **Conclusion** template are at the end. Writing your predictions down is optional.\n\n**Roadmap:** 1–3 infrastructure → 4 BCCD records, phrases and an image-disjoint split *(evaluation practice)* → 5 the inference contract on drawn shapes *(core concept: sigmoid scores, caller-owned threshold)* → 6 two baselines and the frozen model *(evaluation practice)* → 7 bounded fine-tuning of the heads *(core concept: what is trained)* → 8 held-out evaluation → 9 the boxes by eye, the drawn scene again, export and reload *(engineering)* → conclude."
     )]},
     "learning_objectives": (
         "install the pinned runtime; read what the carried package guarantees; stage and digest-verify the immutable "
@@ -135,7 +158,7 @@ TEMPLATE = {
     ),
     "prerequisites": [
         '- **Learner:** basic Python and Colab or Jupyter familiarity; no prior experience with OWLv2, CLIP or fine-tuning. Sigmoid scores, thresholds, IoU, AP and mAP, baselines, matched losses and adapters are explained where they are first used and again in the Glossary.',
-        "- **Runtime:** a fresh supported **Linux x86_64** runtime (Google Colab, Kaggle or Linux Jupyter; CPU or CUDA). Section 1 builds its own Python 3.12.12 environment from a hash-locked list of manylinux wheels, so the Python version of the kernel itself does not matter and nothing is installed into it; a Windows or macOS kernel is not supported. The default path uses CUDA automatically when present. The image tower runs `EVAL_BATCH_SIZE` records per forward at 960 × 960. **Timing (measured):** the recorded Kaggle Tesla T4 run of 25 September 2026 (the previous notebook version, same model stages) took 705 s end to end; this version adds the one-time build of the isolated environment (about one to two minutes). **CPU** is supported but slow: about 500 image-tower passes at 960 × 960 dominate, so expect roughly two hours on a two-core hosted CPU runtime (an estimate from a local two-thread measurement of about 13 s per pass, not a recorded run); use a GPU runtime. The pinned `torch==2.14.0` install and the 620 MB checkpoint are the large downloads; the parquet files are 4.8 MB. The feature cache holds about 1.7 GB of half-precision tensors on the host for 300 records (5.5 MB each).",
+        "- **Runtime:** a fresh supported **Linux x86_64** runtime (Google Colab, Kaggle or Linux Jupyter; CPU or CUDA). Section 1 builds its own Python 3.12.12 environment from a hash-locked list of manylinux wheels, so the Python version of the kernel itself does not matter and nothing is installed into it; a Windows or macOS kernel is not supported. The default path uses CUDA automatically when present. The image tower runs `EVAL_BATCH_SIZE` records per forward at 960 × 960. **Timing (measured):** the recorded run (Colab Tesla T4, 8 October 2026, blob `a545a73b`) took 598.8 s end to end in one pass, including the one-time build of the isolated environment. **CPU** is supported but slow: about 500 image-tower passes at 960 × 960 dominate, so expect roughly two hours on a two-core hosted CPU runtime (an estimate from a local two-thread measurement of about 13 s per pass, not a recorded run); use a GPU runtime. The pinned `torch==2.14.0` install and the 620 MB checkpoint are the large downloads; the parquet files are 4.8 MB. The feature cache holds about 1.7 GB of half-precision tensors on the host for 300 records (5.5 MB each).",
         "- **Knowledge:** basic Python, NumPy and PIL; what a bounding box in xyxy pixel coordinates is; what intersection-over-union, average precision and a precision/recall pair at one threshold measure and why 64 records from one draw give no dispersion; why a self-drawn scene is a plumbing check while a held-out split of one labelled set is a measurement of that set only.",
         "- **Data contract:** records are `{id, image, boxes}` — `image` a PIL image (or a file decodable by Pillow) with sides within 16..4,096 px and `boxes` 1..200 entries `{prompt, box}`: a phrase of at most 48 characters (normalised like a query; at most 16 distinct phrases per dataset) and an `[x0, y0, x1, y1]` pixel box inside the image at least 1 px wide and tall. Ids match `[A-Za-z0-9_.:-]{1,64}` and are unique; a dataset needs 8..5,000 records; splitting de-duplicates by decoded pixels so no image lands in two splits, and `split_dataset` needs at least 12 distinct images at its default fractions (training at least 8, validation and test at least 1 each; `min_split_images()` gives the number for other fractions). BYOD accepts one zip (or folder) of images plus a `boxes.csv` in the layout named above.",
         "- **Validation is structural, not semantic:** every image is decoded and every phrase and box checked, but nothing checks that a box outlines what its phrase names — a mislabelled set is fine-tuned on without complaint.",
@@ -194,13 +217,36 @@ TEMPLATE = {
                 '    return source\n'
                 '\n'
                 '\n'
+                'class BYODRefusal(ValueError):\n'
+                '    """A refused BYOD input: shown as this one message, without a traceback (it names the file and the rule)."""\n'
+                '\n'
+                '    dimer_refusal = True  # the isolated-environment router prints the message alone\n'
+                '\n'
+                '    def _render_traceback_(self):  # the same when the cell runs in the kernel itself\n'
+                '        return [str(self)]\n'
+                '\n'
+                '\n'
+                'def refuse_byod(reason):\n'
+                '    """Forget the previous data so no later cell reuses it, and return one actionable refusal (DAT20)."""\n'
+                "    for stale in ('splits', 'dataset_manifests', 'train_records', 'val_records', 'test_records', 'PROMPTS'):\n"
+                '        globals().pop(stale, None)\n'
+                "    return BYODRefusal(f'BYOD input refused: {{reason}} Fix the upload or BYOD_PATH and run this cell again.')\n"
+                '\n'
+                '\n'
                 "if USE_BYOD:\n"
-                "    byod_dir = Path(str(BYOD_PATH).strip()).expanduser() if str(BYOD_PATH).strip() else None\n"
-                "    # A folder (e.g. a Kaggle dataset under /kaggle/input) is read in place; otherwise one zip.\n"
-                "    byod_zip = byod_dir if byod_dir is not None and byod_dir.is_dir() else byod_file(BYOD_PATH, 'zip of images plus boxes.csv (or set BYOD_PATH to a folder holding them)', ('.zip',))\n"
-                "    records = load_byod_dataset(byod_zip)\n"
-                "    splits = split_dataset(records, seed=SPLIT_SEED)\n"
-                "    data_source = 'BYOD (' + byod_zip.name + ')'\n"
+                "    # A refused input (missing path, wrong file, bad boxes.csv, too few images) prints one message;\n"
+                "    # any other error keeps its traceback.\n"
+                "    try:\n"
+                "        byod_dir = Path(str(BYOD_PATH).strip()).expanduser() if str(BYOD_PATH).strip() else None\n"
+                "        # A folder (e.g. a Kaggle dataset under /kaggle/input) is read in place; otherwise one zip.\n"
+                "        byod_zip = byod_dir if byod_dir is not None and byod_dir.is_dir() else byod_file(BYOD_PATH, 'zip of images plus boxes.csv (or set BYOD_PATH to a folder holding them)', ('.zip',))\n"
+                "    except (FileNotFoundError, RuntimeError, ValueError) as exc:\n"
+                "        raise refuse_byod(exc) from None\n"
+                "    try:\n"
+                "        records = load_byod_dataset(byod_zip)\n"
+                "        splits = split_dataset(records, seed=SPLIT_SEED)\n"
+                "    except ValueError as exc:\n"
+                "        raise refuse_byod(f'{{byod_zip.name}}: {{exc}}.') from None\n"                "    data_source = 'BYOD (' + byod_zip.name + ')'\n"
                 "    raw_rows = {{'byod': len(records)}}\n"
                 "else:\n"
                 "    t0 = time.perf_counter()\n"
@@ -215,7 +261,10 @@ TEMPLATE = {
                 "    try:\n"
                 "        dataset_manifests[name] = validate_dataset(part, min_records=MIN_RECORDS if name == 'train' else 1)\n"
                 "    except ValueError as exc:\n"
-                "        raise ValueError(f'{{name}} split: {{exc}} (a BYOD set needs at least {{min_split_images()}} distinct images at the default split fractions)') from None\n"
+                "        message = f'{{name}} split: {{exc}} (a BYOD set needs at least {{min_split_images()}} distinct images at the default split fractions)'\n"
+                "        if USE_BYOD:\n"
+                "            raise refuse_byod(message) from None\n"
+                "        raise ValueError(message) from None\n"
                 "splits = {{name: manifest['records'] for name, manifest in dataset_manifests.items()}}\n"
                 "disjoint = check_split_disjoint(splits)\n"
                 "train_records, val_records, test_records = splits['train'], splits['validation'], splits['test']\n"
@@ -351,7 +400,7 @@ TEMPLATE = {
                 "`EVAL_BATCH_SIZE`, keeps the boxes whose sigmoid reaches `THRESHOLD`, and scores them. Do not assume the "
                 "frozen detector's behaviour in advance: read its mAP, per-phrase APs, precision, recall, box counts and "
                 "per-record rows from this run."
-                '\n\n**Predict before running:** the detector has never seen blood smears or these phrases. Will its frozen mAP@0.5 be closer to the empty baseline or to 1? Which phrase do you expect it to find best?'
+                '\n\n**Predict before running:** the model card names no blood-smear set among its detection data, and the three phrases are ordinary English. Will its frozen mAP@0.5 be closer to the empty baseline or to 1? Which phrase do you expect it to find best?'
             ),
             "code": (
                 '# A re-run after Section 7 (an experiment or BYOD): put the frozen heads captured at load back first, so the\n'
@@ -392,8 +441,10 @@ TEMPLATE = {
                 "every (patch, phrase) logit with the matched pairs as positives, and **L1 and GIoU** over the matched boxes, "
                 "all normalised by the number of reference boxes. Because the towers are frozen, their outputs — the "
                 "60 × 60 × 768 feature map per image and the three phrase embeddings — are computed once under no gradient "
-                "and cached in half precision on the host (the **frozen-tower cache**), and each step runs only the heads on "
-                "those cached features: the logits equal the full model's. AdamW without weight decay at a fixed learning "
+                "and cached in half precision (float16) on the host (the **frozen-tower cache**), and each step runs only the "
+                "heads on those cached features, so the training logits equal the full model's to within float16 rounding "
+                "(a local CPU measurement on this split, 16 October 2026: largest logit difference 0.047, and the same epoch "
+                "was kept as with a float32 cache). AdamW without weight decay at a fixed learning "
                 "rate, gradient clipping at 1.0, seeded shuffling, no scheduler, no augmentation. Epoch 0 records the frozen "
                 "model's validation rates; every epoch is scored on the 40 validation records at `THRESHOLD`, and the epoch "
                 "with the **highest validation mAP** (the earliest on ties) is kept.\n\n"
@@ -486,7 +537,7 @@ TEMPLATE = {
         },
         {
             "md": (
-                '<details><summary>Check your reasoning</summary>Not together. In the recorded run mAP@0.5 rose from 0.0723 to 0.8918, recall from 0.0591 to 0.9894, but precision only from 0.1295 to 0.2236: the adapted model kept 3,744 boxes for 846 references (837 matched), so most kept boxes are duplicates — there is no non-maximum suppression and the threshold stayed at 0.1. mAP ranks by score and is barely hurt by low-scoring duplicates; precision at one threshold is. Per phrase: platelet 0.0 → 0.8805, red blood cell 0.0 → 0.8476, white blood cell 0.2168 → 0.9473. The verdict line records the comparison instead of stopping the notebook.</details>'
+                '<details><summary>Check your reasoning</summary>Not together. In the recorded run mAP@0.5 rose from 0.0723 to 0.8918, recall from 0.0591 to 0.9894, but precision only from 0.1295 to 0.2236: the adapted model kept 3,744 boxes for 846 references (837 matched), so most kept boxes are duplicates — there is no non-maximum suppression and the threshold stayed at 0.1. mAP ranks by score and is barely hurt by low-scoring duplicates; precision at one threshold is. Per phrase: platelet 0.0 → 0.8805, red blood cell 0.0 → 0.8476, white blood cell 0.2168 → 0.9473. The verdict line records the comparison instead of stopping the notebook. Your counts may differ: precision and kept-box counts at the 0.1 threshold move with the device and numeric path. In a local CPU measurement of the same code (16 October 2026, not a hosted run) the adapted model kept 2,974 boxes at precision 0.279 with test mAP@0.5 0.8914 and epoch 8 kept; with the frozen-tower cache in float32 instead of float16 it scored 0.8885 and kept the same epoch.</details>'
             ),
         },
         {
@@ -638,15 +689,19 @@ TEMPLATE = {
         '- Precision moved from ___ to ___ and recall from ___ to ___; the adapted model predicted ___ boxes against ___ references, which tells me ___.\n'
         '- The phrase that changed most was ___, because ___.\n'
         '- One reason not to trust this gain on my own images yet: ___.\n\n'
+        "The upstream code is the Scenic OWL-ViT project [4]. The package, its contract and the weight provenance are "
+        "documented in the repository README [7], model card [8] and weight notes [9]; the notebook follows the DIMER "
+        "specifications [10].\n\n"
         "## References\n\n"
-        "- Repository README: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/README.md\n"
-        "- Repository model card: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/MODEL_CARD.md\n"
-        "- Weight provenance: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/docs/WEIGHTS.md\n"
-        "- Upstream model: https://huggingface.co/{MODEL_ID}\n"
-        "- Upstream code (Scenic, OWL-ViT project): https://github.com/google-research/scenic/tree/main/scenic/projects/owl_vit\n"
-        "- Scaling Open-Vocabulary Object Detection (Minderer, Gritsenko, Houlsby, 2023): https://arxiv.org/abs/2306.09683\n"
-        "- Simple Open-Vocabulary Object Detection with Vision Transformers (Minderer et al., 2022): https://arxiv.org/abs/2205.06230\n"
-        "- BCCD (Public Domain): https://huggingface.co/datasets/keremberke/blood-cell-object-detection — the Roboflow Universe export of the Blood Cell Count and Detection dataset\n"
-        "- DIMER Notebook Specification 2.2 and Model Card Specification 1.1 (fleet specs in the ml-worker repository)"
+        "[1] M. Minderer, A. Gritsenko, and N. Houlsby, \u201cScaling open-vocabulary object detection,\u201d in *Advances in Neural Information Processing Systems (NeurIPS)*, 2023. [Online]. Available: https://arxiv.org/abs/2306.09683\n\n"
+        "[2] M. Minderer *et al.*, \u201cSimple open-vocabulary object detection with vision transformers,\u201d in *Proc. European Conf. Computer Vision (ECCV)*, 2022. [Online]. Available: https://arxiv.org/abs/2205.06230\n\n"
+        "[3] Google, \u201cowlv2-base-patch16-ensemble,\u201d Hugging Face model card, revision `{MODEL_REVISION}`. [Online]. Available: https://huggingface.co/{MODEL_ID}/blob/{MODEL_REVISION}/README.md\n\n"
+        "[4] Google Research, \u201cScenic: OWL-ViT project,\u201d GitHub repository. [Online]. Available: https://github.com/google-research/scenic/tree/main/scenic/projects/owl_vit\n\n"
+        "[5] keremberke, \u201cblood-cell-object-detection (BCCD, Roboflow Universe export, Public Domain),\u201d Hugging Face dataset. [Online]. Available: https://huggingface.co/datasets/keremberke/blood-cell-object-detection\n\n"
+        "[6] K. Valcorza, \u201cowlv2-detection-pipeline: release verification,\u201d GitHub repository. [Online]. Available: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/docs/release-verification.md\n\n"
+        "[7] K. Valcorza, \u201cowlv2-detection-pipeline: README,\u201d GitHub repository. [Online]. Available: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/README.md\n\n"
+        "[8] K. Valcorza, \u201cowlv2-detection-pipeline: model card,\u201d GitHub repository. [Online]. Available: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/MODEL_CARD.md\n\n"
+        "[9] K. Valcorza, \u201cowlv2-detection-pipeline: weight provenance,\u201d GitHub repository. [Online]. Available: https://github.com/kurtvalcorza/owlv2-detection-pipeline/blob/main/docs/WEIGHTS.md\n\n"
+        "[10] DIMER, \u201cDIMER Notebook Specification 2.5 and Model Card Specification 1.1,\u201d fleet specifications in the ml-worker repository."
     ),
 }

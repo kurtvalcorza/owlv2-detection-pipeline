@@ -7,10 +7,12 @@ epoch 0) lives in tests/test_model_backed.py and runs where the snapshot is stag
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import json
 import re
+import sys
 import zipfile
 from pathlib import Path
 
@@ -226,12 +228,12 @@ def test_owd_m5_pyarrow_and_scipy_are_runtime_pins_and_locked(nb: dict) -> None:
     assert "'scipy': scipy.__version__" in runtime
 
 
-# --- OWD-m7: spec 2.2 declared --------------------------------------------------------------------------------------
+# --- OWD-m7: spec declared (2.2 then; migrated to 2.5 by review OWL-m3, 2026-10-16) ------------------------------
 
 
-def test_owd_m7_declares_notebook_spec_2_2(nb: dict) -> None:
-    assert nb["metadata"]["dimer"]["notebook_spec"] == "2.2"
-    assert "DIMER Notebook Specification 2.2" in _markdown(nb)
+def test_owd_m7_declares_notebook_spec_2_5(nb: dict) -> None:
+    assert nb["metadata"]["dimer"]["notebook_spec"] == "2.5"
+    assert "DIMER Notebook Specification 2.5" in _markdown(nb)
 
 
 # --- OWD-m8: the printed weight source is real ---------------------------------------------------------------------
@@ -241,3 +243,193 @@ def test_owd_m8_load_cell_prints_the_verified_source(nb: dict) -> None:
     code = "\n".join(_code(nb))
     assert "'local-snapshot'" not in code
     assert "'weights_dir': str(WEIGHTS_DIR), 'weight_sha256': getattr(pipe, 'weight_sha256', None)" in code
+
+
+# === 2026-10-16 review (OWL-*): DAT9, REL13 labels, spec 2.5, DAT20 refusals, EXE5, float16 cache wording ==========
+
+
+def test_owl_m1_no_novelty_claim_and_pretraining_overlap_stated(nb: dict) -> None:
+    md = _markdown(nb)
+    assert not re.search(r"\bnever (?:saw|seen)\b", md, re.I)
+    assert "has not been audited and cannot be ruled" in md
+    assert "web image-text pairs" in md
+
+
+def test_owl_m2_worked_answers_credit_the_recorded_run_of_their_blob(nb: dict) -> None:
+    md = _markdown(nb)
+    for stale in ("still needs its own", "25 September 2026", "705 s", "previous notebook version", "this version removes it"):
+        assert stale not in md, stale
+    assert "8 October 2026" in md and "`a545a73b`" in md and "598.8 s" in md
+    assert "counts as verified only once a run of that exact blob is listed there" in md
+    record = (ROOT / "docs" / "release-verification.md").read_text(encoding="utf-8")
+    assert "a545a73b" in record and "598.8 s" in record
+
+
+def test_owl_m3_spec_2_5_kind_use_notice_and_ieee_references(nb: dict) -> None:
+    meta = nb["metadata"]["dimer"]
+    assert meta["notebook_spec"] == "2.5" and meta["notebook_kind"] == "TUTORIAL"
+    first_code = next(i for i, c in enumerate(nb["cells"]) if c["cell_type"] == "code")
+    before = "\n".join(_src(c) for c in nb["cells"][:first_code])
+    assert "> **⚠️ Notice.** For research, training and evaluation only." in before
+    assert "without warranty of any kind" in before and "accept no liability" in before
+    assert "> **Not a medical device.**" in before and "diagnosis" in before
+    assert before.index("**⚠️ Notice.**") > before.index("\n")
+    text = _markdown(nb)
+    refs = text[text.index("## References"):]
+    numbers = [int(n) for n in re.findall(r"^\[(\d+)\] ", refs, flags=re.M)]
+    assert numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 8
+    body = text[: text.index("## References")]
+    cited = {int(n) for group in re.findall(r"\[(\d+(?:\], \[\d+)*)\]", body) for n in re.findall(r"\d+", group)}
+    assert cited == set(numbers), (sorted(cited), numbers)
+
+
+def _byod_prefix(nb: dict, path: str) -> str:
+    source = _cell_with(nb, "class BYODRefusal(ValueError):")
+    source = source[: source.index("disjoint = check_split_disjoint(")]
+    assert source.count("USE_BYOD = False") == 1 and source.count("BYOD_PATH = ''") == 1
+    return source.replace("USE_BYOD = False", "USE_BYOD = True").replace("BYOD_PATH = ''", f"BYOD_PATH = {path!r}")
+
+
+def _byod_namespace(**extra) -> dict:
+    import os
+
+    from owlv2_detection_pipeline import min_split_images as _msi
+
+    ns = {"os": os, "Path": Path, "load_byod_dataset": load_byod_dataset, "split_dataset": split_dataset,
+          "validate_dataset": validate_dataset, "MIN_RECORDS": MIN_RECORDS, "min_split_images": _msi,
+          "train_records": ["stale"], "splits": {"stale": []}}
+    ns.update(extra)
+    return ns
+
+
+def test_owl_m4_missing_byod_path_is_one_refusal_without_traceback(nb: dict, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    ns = _byod_namespace()
+    with pytest.raises(ValueError) as caught:
+        exec(_byod_prefix(nb, str(tmp_path / "missing.zip")), ns)
+    exc = caught.value
+    assert type(exc).__name__ == "BYODRefusal" and getattr(exc, "dimer_refusal", False)
+    assert str(exc).startswith("BYOD input refused: BYOD path") and "does not exist" in str(exc)
+    assert str(exc).endswith("run this cell again.")
+    assert exc._render_traceback_() == [str(exc)]
+    assert "train_records" not in ns and "splits" not in ns  # stale data cannot leak into later cells
+
+
+def test_owl_m4_too_small_byod_zip_is_one_refusal(nb: dict, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "small.zip"
+    rows = ["file,prompt,x0,y0,x1,y1"]
+    with zipfile.ZipFile(archive, "w") as zf:
+        for i, record in enumerate(_records(min_split_images() - 1)):
+            buf = io.BytesIO()
+            record["image"].save(buf, format="PNG")
+            zf.writestr(f"img{i:02d}.png", buf.getvalue())
+            rows.append(f"img{i:02d}.png,a cell,2,2,20,20")
+        zf.writestr("boxes.csv", "\n".join(rows) + "\n")
+    with pytest.raises(ValueError) as caught:
+        exec(_byod_prefix(nb, str(archive)), _byod_namespace())
+    assert type(caught.value).__name__ == "BYODRefusal"
+    assert "small.zip" in str(caught.value) and f"at least {min_split_images()} distinct images" in str(caught.value)
+
+
+def test_owl_m4_unexpected_byod_error_keeps_its_traceback(nb: dict, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "folder"
+    folder.mkdir()
+
+    def _broken(path):
+        raise OSError("disk went away")
+
+    with pytest.raises(OSError, match="disk went away"):
+        exec(_byod_prefix(nb, str(folder)), _byod_namespace(load_byod_dataset=_broken))
+
+
+def _kernel_source(nb: dict) -> str:
+    cells = [_src(c) for c in nb["cells"] if c["cell_type"] == "code" and "# dimer: kernel cell" in _src(c)]
+    assert len(cells) == 1
+    return cells[0]
+
+
+def test_owl_m4_router_raises_the_refusal_message_alone(nb: dict) -> None:
+    import signal
+    import sys
+
+    tree = ast.parse(_kernel_source(nb))
+    wanted = {"IsolatedCellError", "IsolatedCellRefusal", "IsolatedRuntime"}
+    nodes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in wanted]
+    assert {n.name for n in nodes} == wanted
+    ns: dict = {"sys": sys, "signal": signal}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "<router>", "exec"), ns)
+
+    class _Pipe:
+        def __init__(self, messages):
+            self.messages = list(messages)
+
+        def recv(self):
+            return self.messages.pop(0)
+
+        def send(self, message):
+            pass
+
+    runtime = ns["IsolatedRuntime"].__new__(ns["IsolatedRuntime"])
+    runtime._recv = _Pipe([("refusal", "BYOD input refused: x.zip: boxes.csv must have the columns ...")])
+    runtime._send = _Pipe([])
+    runtime._display = lambda *a, **k: None
+    with pytest.raises(ns["IsolatedCellRefusal"]) as caught:
+        runtime.run("raise_something()")
+    assert caught.value._render_traceback_() == ["BYOD input refused: x.zip: boxes.csv must have the columns ..."]
+    runtime._recv = _Pipe([("error", "Traceback ...\nOSError: boom\n", "OSError: boom")])
+    with pytest.raises(ns["IsolatedCellError"]):
+        runtime.run("raise_something()")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the worker protocol uses Linux pass_fds")
+def test_owl_m4_worker_sends_refusals_without_traceback_and_errors_with_one(nb: dict) -> None:
+    import os
+    import subprocess
+    from multiprocessing.connection import Connection
+
+    tree = ast.parse(_kernel_source(nb))
+    node = next(n for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_WORKER_SOURCE")
+    worker = ast.literal_eval(node.value)
+    to_kernel_r, to_kernel_w = os.pipe()
+    to_worker_r, to_worker_w = os.pipe()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", worker, str(to_kernel_w), str(to_worker_r)],
+        pass_fds=(to_kernel_w, to_worker_r),
+        env=dict(os.environ, MPLBACKEND="Agg", DIMER_KERNEL_IS_COLAB="0"),
+    )
+    os.close(to_kernel_w)
+    os.close(to_worker_r)
+    recv, send = Connection(to_kernel_r, writable=False), Connection(to_worker_w, readable=False)
+
+    def _final(source):
+        send.send(("run", source))
+        while True:
+            message = recv.recv()
+            if message[0] in ("refusal", "error", "done"):
+                return message
+
+    try:
+        assert _final("class R(ValueError):\n    dimer_refusal = True\nraise R('BYOD input refused: x')\n") == ("refusal", "BYOD input refused: x")
+        error = _final("raise OSError('boom')\n")
+        assert error[0] == "error" and "Traceback" in error[1] and error[2] == "OSError: boom"
+        assert _final("x = 1\n") == ("done",)
+    finally:
+        send.close()
+        proc.wait(timeout=30)
+
+
+def test_owl_m5_isolated_env_override_documented(nb: dict) -> None:
+    assert "DIMER_ISOLATED_ENV" in _markdown(nb)
+
+
+def test_owl_m6_float16_cache_wording_matches_the_code(nb: dict) -> None:
+    md = _markdown(nb)
+    pipeline = (ROOT / "src" / "owlv2_detection_pipeline" / "pipeline.py").read_text(encoding="utf-8")
+    assert '.to("cpu", torch.float16)' in pipeline
+    for text in (md, pipeline):
+        assert not re.search(r"logits equal the full model'?s(?! to within float16 rounding)", text)
+    assert "run the same arithmetic" not in md
+    assert "to within float16 rounding" in md and "to within float16 rounding" in pipeline
+    assert "0.8914" in md and "0.8885" in md and "2,974" in md
