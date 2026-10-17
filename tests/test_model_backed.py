@@ -107,12 +107,12 @@ def test_short_adaptation_and_artifact_round_trip(pipe, records, tmp_path):
     result = pipe.adapt(records[:12], records[12:], epochs=2, lr=1e-4, batch_size=4)
     assert result["n_trainable"] == HEAD_PARAMETERS and result["n_total"] == PARAMETER_COUNT and result["threshold"] == 0.1 and result["prompts"] == sorted(PROMPTS)
     assert result["history"][0]["note"] == "frozen model" and result["history"][1]["train_loss"] > 0.0 and set(result["history"][1]["loss_terms"]) == {"focal", "l1", "giou"}
-    assert set(result["history"][1]["val"]) == {"map50", "precision", "recall", "f1", "n", "n_predicted_boxes"} and result["best_epoch"] in (0, 1, 2)
+    assert set(result["history"][1]["val"]) == {"map50", "map50_exact", "precision", "recall", "f1", "n", "n_predicted_boxes"} and result["best_epoch"] in (0, 1, 2)
     assert all(n.startswith(("class_head.", "box_head.")) for n in result["trainable_names"]) and len(result["trainable_names"]) == 12
     artifact = pipe.save_artifact(tmp_path / "adapter", {"note": "test"})
     manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["tensors"]) == 12 and manifest["base"]["weight_sha256"] == pipe.weight_sha256
-    assert manifest["metadata"] == {"note": "test"} and manifest["adapter"]["selection"] == "highest validation mAP at the IoU threshold"
+    assert manifest["metadata"] == {"note": "test"} and manifest["adapter"]["selection"] == "highest unrounded validation AP50 over detections retained at the score threshold (map50_exact)"
     reloaded = Owlv2DetectionPipeline.from_artifact(artifact, weights_dir=DEFAULT_WEIGHTS_DIR)
     a = pipe.detect_batch([r["image"] for r in records[:3]], PROMPTS)
     b = reloaded.detect_batch([r["image"] for r in records[:3]], PROMPTS)

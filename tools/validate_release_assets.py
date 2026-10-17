@@ -1,6 +1,6 @@
 """Static release-asset validation for the OWLv2 base/16 ensemble open-vocabulary detection DIMER pipeline.
 
-Checks the STANDALONE tutorial notebook (DIMER Notebook Specification 2.2 §4), the tutorial
+Checks the STANDALONE tutorial notebook (DIMER Notebook Specification 2.5 §4), the tutorial
 registry, model card, README, STATUS.md and weight documentation for source conformance and
 cross-document identity consistency, and runs the generator parity checks (PAR1–PAR3).
 
@@ -64,9 +64,9 @@ CODE_MARKERS = (
     "report = evaluation_report(result, scene_boxes, sample_kind=",
     "baseline_empty = empty_baseline(test_records)",
     "baseline_grid = grid_baseline(test_records, train_records)",
-    "frozen_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
+    "frozen_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE, all_candidates=True)",
     "adapt_result = pipe.adapt(train_records, val_records, prompts=PROMPTS, epochs=EPOCHS, lr=LEARNING_RATE, batch_size=BATCH_SIZE, threshold=THRESHOLD, progress=report)",
-    "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
+    "adapted_test = pipe.evaluate(test_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE, all_candidates=True)",
     "adapted_val = pipe.evaluate(val_records, prompts=PROMPTS, threshold=THRESHOLD, batch_size=EVAL_BATCH_SIZE)",
     "'verdicts': {'adapted_map50_at_least_frozen': adapted_test['map50'] >= frozen_test['map50']",
     "pipe = Owlv2DetectionPipeline.from_pretrained(weights_dir=WEIGHTS_DIR)",
@@ -97,7 +97,7 @@ MARKDOWN_MARKERS = (
     "**recall**",
     "**empty** baseline",
     "**grid-prior** baseline",
-    "**DETR-style matched loss**",
+    "**DETR-style matched objective**",
     "**Hungarian matching**",
     "**sigmoid focal loss**",
     "**frozen-tower cache**",
@@ -148,10 +148,10 @@ INSTALL_CELL_MARKER = "def _isolated_environment_ready():"
 # ---------------------------------------------------------------------------
 # Shared checks. Everything below is source/structure validation only. Passing
 # these checks is NOT clean-runtime execution evidence under DIMER Notebook
-# Specification 2.2; see docs/release-verification.md for the release gate.
+# Specification 2.5; see docs/release-verification.md for the release gate.
 # ---------------------------------------------------------------------------
 
-NOTEBOOK_SPEC = "2.2"
+NOTEBOOK_SPEC = "2.5"
 ALLOWED_PROFILES = {"E2E", "ARTIFACT-INFERENCE", "TASK-INFERENCE", "MULTI-CAPABILITY", "SMOKE"}
 STATUS_TOKENS = ("Candidate", "Release-grade")
 PLACEHOLDER = re.compile(r"\b(TODO|TBD|FIXME)\b|Insert text here|Tooltip:|@P:[A-Z0-9_]+@", re.I)
@@ -226,7 +226,7 @@ COMMON_MARKDOWN_MARKERS = (
     "without the repository being",
     "It does **not** establish benchmark superiority",
     "## References",
-    f"- Repository model card: https://github.com/kurtvalcorza/{REPO_NAME}/blob/main/MODEL_CARD.md",
+    f"model card,” GitHub repository. [Online]. Available: https://github.com/kurtvalcorza/{REPO_NAME}/blob/main/MODEL_CARD.md",
 )
 # Patterns that must never appear in tutorial code (comment-stripped), in any cell.
 FORBIDDEN_PATTERNS = (
