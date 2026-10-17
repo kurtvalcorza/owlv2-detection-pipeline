@@ -259,10 +259,10 @@ def test_owl_m2_worked_answers_credit_the_recorded_run_of_their_blob(nb: dict) -
     md = _markdown(nb)
     for stale in ("still needs its own", "25 September 2026", "705 s", "previous notebook version", "this version removes it"):
         assert stale not in md, stale
-    assert "8 October 2026" in md and "`a545a73b`" in md and "598.8 s" in md
+    assert "17 October 2026" in md and "`3283e836`" in md and "565.9 s" in md and "8 October 2026" not in md
     assert "counts as verified only once a run of that exact blob is listed there" in md
     record = (ROOT / "docs" / "release-verification.md").read_text(encoding="utf-8")
-    assert "a545a73b" in record and "598.8 s" in record
+    assert "3283e836" in record and "565.9 s" in record
 
 
 def test_owl_m3_spec_2_5_kind_use_notice_and_ieee_references(nb: dict) -> None:
