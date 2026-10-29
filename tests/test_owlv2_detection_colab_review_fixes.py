@@ -309,9 +309,9 @@ def test_owl_m4_missing_byod_path_is_one_refusal_without_traceback(nb: dict, tmp
         exec(_byod_prefix(nb, str(tmp_path / "missing.zip")), ns)
     exc = caught.value
     assert type(exc).__name__ == "BYODRefusal" and getattr(exc, "dimer_refusal", False)
-    assert str(exc).startswith("BYOD input refused: BYOD path") and "does not exist" in str(exc)
+    assert str(exc).startswith("missing.zip: BYOD path") and "does not exist" in str(exc)
     assert str(exc).endswith("run this cell again.")
-    assert exc._render_traceback_() == [str(exc)]
+    assert exc._render_traceback_() == ["Refused: " + str(exc)]
     assert "train_records" not in ns and "splits" not in ns  # stale data cannot leak into later cells
 
 
@@ -372,12 +372,12 @@ def test_owl_m4_router_raises_the_refusal_message_alone(nb: dict) -> None:
             pass
 
     runtime = ns["IsolatedRuntime"].__new__(ns["IsolatedRuntime"])
-    runtime._recv = _Pipe([("refusal", "BYOD input refused: x.zip: boxes.csv must have the columns ...")])
+    runtime._recv = _Pipe([("refusal", "x.zip: boxes.csv must have the columns ...")])
     runtime._send = _Pipe([])
     runtime._display = lambda *a, **k: None
     with pytest.raises(ns["IsolatedCellRefusal"]) as caught:
         runtime.run("raise_something()")
-    assert caught.value._render_traceback_() == ["BYOD input refused: x.zip: boxes.csv must have the columns ..."]
+    assert caught.value._render_traceback_() == ["Refused: x.zip: boxes.csv must have the columns ..."]
     runtime._recv = _Pipe([("error", "Traceback ...\nOSError: boom\n", "OSError: boom")])
     with pytest.raises(ns["IsolatedCellError"]):
         runtime.run("raise_something()")

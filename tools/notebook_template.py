@@ -197,8 +197,11 @@ TEMPLATE = {
                 "BYOD_PATH = ''  # @param {{type:\"string\"}}\n"
                 "SPLIT_SEED = 42  # @param {{type:\"integer\"}}\n\n"
                 "os.makedirs('outputs', exist_ok=True)\n"
+                "# The file the learner gave, by name; '(no file)' until an upload arrives.\n"
+                "byod_label = (Path(BYOD_PATH.strip()).expanduser().name or BYOD_PATH.strip()) if BYOD_PATH.strip() else '(no file)'\n"
                 'def byod_file(path, kind, suffixes=()):\n'
                 '    """BYOD path first (works on Colab, Kaggle and Jupyter); on Colab an empty path opens the upload dialog."""\n'
+                '    global byod_label\n'
                 '    if str(path).strip():\n'
                 '        source = Path(str(path).strip()).expanduser()\n'
                 '        if not source.is_file():\n'
@@ -212,6 +215,7 @@ TEMPLATE = {
                 '        if len(uploaded) != 1:\n'
                 "            raise ValueError(f'Upload exactly one {{kind}} (received {{len(uploaded)}} files; a cancelled dialog sends none). Run this cell again.')\n"
                 '        name, payload = next(iter(uploaded.items()))\n'
+                '        byod_label = Path(name).name\n'
                 "        source = Path('work') / Path(name).name\n"
                 '        source.parent.mkdir(parents=True, exist_ok=True)\n'
                 '        source.write_bytes(payload)\n'
@@ -221,35 +225,37 @@ TEMPLATE = {
                 '\n'
                 '\n'
                 'class BYODRefusal(ValueError):\n'
-                '    """A refused BYOD input: shown as this one message, without a traceback (it names the file and the rule)."""\n'
+                '    """A refused BYOD input, <file>: <reason>: shown as the one line Refused: <file>: <reason>, without a traceback."""\n'
                 '\n'
-                '    dimer_refusal = True  # the isolated-environment router prints the message alone\n'
+                '    dimer_refusal = True  # the isolated-environment router shows the same one line\n'
                 '\n'
                 '    def _render_traceback_(self):  # the same when the cell runs in the kernel itself\n'
-                '        return [str(self)]\n'
+                '        return [f"Refused: {{self}}"]\n'
                 '\n'
                 '\n'
-                'def refuse_byod(reason):\n'
+                'def refuse_byod(reason, file):\n'
                 '    """Forget the previous data so no later cell reuses it, and return one actionable refusal (DAT20)."""\n'
                 "    for stale in ('splits', 'dataset_manifests', 'train_records', 'val_records', 'test_records', 'PROMPTS'):\n"
                 '        globals().pop(stale, None)\n'
-                "    return BYODRefusal(f'BYOD input refused: {{reason}} Fix the upload or BYOD_PATH and run this cell again.')\n"
+                "    reason = str(reason)\n"
+                "    reason = reason[len(file) + 2:] if reason.startswith(file + ': ') else reason  # the file is named once\n"
+                "    return BYODRefusal(f'{{file}}: {{reason}} Fix the upload or BYOD_PATH and run this cell again.')\n"
                 '\n'
                 '\n'
                 "if USE_BYOD:\n"
-                "    # A refused input (missing path, wrong file, bad boxes.csv, too few images) prints one message;\n"
+                "    # A refused input (missing path, wrong file, bad boxes.csv, too few images) shows one Refused: line;\n"
                 "    # any other error keeps its traceback.\n"
                 "    try:\n"
                 "        byod_dir = Path(str(BYOD_PATH).strip()).expanduser() if str(BYOD_PATH).strip() else None\n"
                 "        # A folder (e.g. a Kaggle dataset under /kaggle/input) is read in place; otherwise one zip.\n"
                 "        byod_zip = byod_dir if byod_dir is not None and byod_dir.is_dir() else byod_file(BYOD_PATH, 'zip of images plus boxes.csv (or set BYOD_PATH to a folder holding them)', ('.zip',))\n"
                 "    except (FileNotFoundError, RuntimeError, ValueError) as exc:\n"
-                "        raise refuse_byod(exc) from None\n"
+                "        raise refuse_byod(exc, byod_label) from None\n"
                 "    try:\n"
                 "        records = load_byod_dataset(byod_zip)\n"
                 "        splits = split_dataset(records, seed=SPLIT_SEED)\n"
                 "    except ValueError as exc:\n"
-                "        raise refuse_byod(f'{{byod_zip.name}}: {{exc}}.') from None\n"                "    data_source = 'BYOD (' + byod_zip.name + ')'\n"
+                "        raise refuse_byod(f'{{exc}}.', byod_zip.name) from None\n"                "    data_source = 'BYOD (' + byod_zip.name + ')'\n"
                 "    raw_rows = {{'byod': len(records)}}\n"
                 "else:\n"
                 "    t0 = time.perf_counter()\n"
