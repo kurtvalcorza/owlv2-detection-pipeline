@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-GENERATOR_VERSION = "build_notebook.py/2.2"
+GENERATOR_VERSION = "build_notebook.py/2.3"
 NOTEBOOK_SPEC = "2.5"
 
 # ST2: default rewrite rule; a template may replace it with its own `rewrites` list. Every rule must
@@ -330,10 +330,10 @@ class IsolatedCellError(RuntimeError):
 
 
 class IsolatedCellRefusal(Exception):
-    """A routed cell refused a user input (for example a BYOD upload); shown as its message alone, with no traceback."""
+    """A routed cell refused a user input (DAT20): shown as the one line Refused: <file>: <reason>, with no traceback."""
 
     def _render_traceback_(self):
-        return [str(self)]
+        return [f"Refused: {self}"]
 
 
 class IsolatedRuntime:
