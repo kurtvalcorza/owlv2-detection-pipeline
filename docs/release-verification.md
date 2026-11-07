@@ -94,7 +94,51 @@ downloads.
 | Superseded `TASK-INFERENCE` | `6c9365e` / `ce245f5aa2c5` | 2026-09-14 | Kaggle CPU (`kurtvalcorza/dimer-nb2-owlv2-detection` v1) | **PASSED** — 8/8 code cells, 243.2 s, 20 files, 622 MB staged; historical inference evidence only, not evidence for the E2E blob |
 | Superseded `TASK-INFERENCE` local pre-flight | notebook blob `a37382571bee` (commit `2dd34c2`, generated at `5a8fa2f`) | 2026-09-14 | Local Windows fresh-kernel CPU harness | **PASSED** — 8/8 code cells, 68.6 s; pre-flight only |
 
-### Hosted Colab T4 runs of blob `cd3e85a1` (2026-10-29)
+### REL14 hosted runs of blob `5aa192ac` (2026-11-03)
+
+These 2 runs executed main `4e543c559686cdb9b4b3e4e0510a2855ea5ffb5b` (`tutorials/owlv2_detection_colab.ipynb` blob `5aa192ac94fa5506895b0650cee3def31d9b47e5`) as Colab CLI sequential executions (`colab exec -f`) on fresh Colab Tesla T4 VMs (session `suite-owlv2-4e543c5-6ce9`), not a browser `Run all`. The Colab CLI version is not recorded in `exec.log` or `run_summary.json`. The saved notebooks have no execution counts; cell order is taken from `exec.log`. Each `run_summary.json` records the commit and notebook blob above, `verdict` `PASS`, `exec_exit_code` 0, `input_unchanged` true and `stop_verified` true (the VM was released); the SHA-256 of each executed notebook equals the summary's `executed_sha256`. Local paths in the exec logs are redacted byte-wise to `<local-run-dir>`; the notebooks and summaries carried none.
+
+| Date (UTC) | Commit / notebook blob | Executor | Path exercised | Code cells | Wall time | Outcome |
+|---|---|---|---|---:|---:|---|
+| 2026-11-03 02:17 | `4e543c5` / `5aa192ac` | Colab CLI sequential execution, fresh Colab Tesla T4 | default settings, no overrides | 12/12 | 612.8 s | **One pass, no restart, 0 errors**; [retained evidence](execution-evidence/2026-11-03/) |
+| 2026-11-03 02:28 | `4e543c5` / `5aa192ac` | Colab CLI sequential execution, fresh Colab Tesla T4 | scripted DAT20 refusal: `USE_BYOD` `False` → `True` and `BYOD_PATH` `''` → `'/etc/hostname'` | 7/7 of the cut copy | 98.5 s | **Refused as designed**: one `Refused:` line, no traceback, earlier cells clean; [retained evidence](execution-evidence/2026-11-03/) |
+
+Lines printed by the default run (quoted from the executed notebook):
+
+```text
+{'verified_files': 9, 'revision': 'cfd3195ba4ea9592eec887ded089f4c08eff231d'}
+{'map50': {'empty': 0.0, 'grid': 0.015, 'frozen': 0.072, 'adapted': 0.891}}
+{'delta_vs_frozen': {'map50': 0.819, 'precision': 0.093, 'recall': 0.928, 'f1': 0.283}}
+{'all_candidates_ap50_display_only': {'frozen': 0.0845, 'adapted': 0.8929}}
+{'reload_parity': {'compared_at': 'label, score to 4 dp, box to 1 dp', 'identical_detections': 8, 'of': 8}, 'reloaded_best_epoch': 8}
+```
+
+Apart from timings, run ids, process ids and the carried source revision, the printed output equals the 2026-10-29 default run of blob `cd3e85a1` line for line.
+
+**DAT20 refusal record (2026-11-03).** Overrides, set by `--set` on a copy of the blob: `USE_BYOD` `False` → `True` and `BYOD_PATH` `''` → `'/etc/hostname'` (the run copy differs from the blob in exactly those 2 source lines). The suite cut the run copy right after the refusing cell `owlv2_detection-16`, dropping 16 cells (5 of them code cells), which reproduces `Run all` stopping at the first error; the cut copy is `run_copy.ipynb`, SHA-256 `048b58687e517692c2b13c1da17e18139b11dbf65f151ac5812301686a0c2e92` (Git blob `3d8b06ba`), equal to the summary's `run_copy_sha256`. The 6 earlier code cells completed without an error. The refusing cell halted with `ename` `IsolatedCellRefusal` and printed exactly one `Refused:` line, with no traceback:
+
+```text
+Refused: hostname: expected a zip of images plus boxes.csv (or set BYOD_PATH to a folder holding them) ending in .zip. Fix the upload or BYOD_PATH and run this cell again.
+```
+
+This run says nothing about the 16 cut cells, which did not run in it.
+
+| File (under `docs/execution-evidence/2026-11-03/`) | Captured SHA-256 | Committed SHA-256 |
+|---|---|---|
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_default.ipynb` | `cdf4efcacbeafb347b46cfe1a5749b402857b0a67f0e17d1af6f9181d4b61b64` | `cdf4efcacbeafb347b46cfe1a5749b402857b0a67f0e17d1af6f9181d4b61b64` (unchanged, no local path) |
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_default_exec.log` | `2bdddcf6463a5139130f34fa5f421eb93294aebad6adc4aa9626b96557d28aac` | `be06a077149c86f9b44cc67e9873347334030c8acc0ef8f3126c49a49d33f0bf` (2 local-path replacements) |
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_default_run_summary.json` | `58c220fd26733c5950e56c60224c8b340ab9a0054848df29743545a0c18eba2f` | `58c220fd26733c5950e56c60224c8b340ab9a0054848df29743545a0c18eba2f` (unchanged, no local path) |
+
+| File (under `docs/execution-evidence/2026-11-03/`) | Captured SHA-256 | Committed SHA-256 |
+|---|---|---|
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_refusal.ipynb` | `801f59868ba417f0dbf31806a5c7a94e1aed82aeb93a66db6e39e9284f7fd7b3` | `801f59868ba417f0dbf31806a5c7a94e1aed82aeb93a66db6e39e9284f7fd7b3` (unchanged, no local path) |
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_refusal_exec.log` | `c4e7216ab1da6b01b98f4154cddf7e74b8c2ea0a39bc520caf445f4427fe9148` | `d458f6e0c545b624509c22abc2e846494a73b9ff21c0de7e27d79479dfd4c194` (2 local-path replacements) |
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_refusal_run_summary.json` | `0bd25bc25b756d61effae0ba0c3408b9c19607fa23cb7b7bcb1f6a6755438238` | `0bd25bc25b756d61effae0ba0c3408b9c19607fa23cb7b7bcb1f6a6755438238` (unchanged, no local path) |
+| `owlv2_detection_colab_4e543c5_colab-cli-t4_refusal_run_copy.ipynb` | `048b58687e517692c2b13c1da17e18139b11dbf65f151ac5812301686a0c2e92` | `048b58687e517692c2b13c1da17e18139b11dbf65f151ac5812301686a0c2e92` (unchanged, no local path) |
+
+Not exercised by these runs: an accepted BYOD input (REL12) and a browser `Run all` of the interactive journeys, forms and uploads (REL2).
+
+### Hosted Colab T4 runs of blob `cd3e85a1` (2026-10-29; history, REL14)
 
 These runs executed the PR head `b6c83a26e6cbe71aa02b8dbb84e3f731bdec249b`, notebook `tutorials/owlv2_detection_colab.ipynb` blob `cd3e85a1e129a11888be679d8dde2003246664eb`, fetched at the 40-character SHA and Git-blob verified, with the Colab CLI (`colab exec -f`) on a fresh Colab Tesla T4 session (not a browser `Run all`). Each `run_summary.json` records `verdict` `PASS`, `exec_exit_code` 0, `input_unchanged` true and `stop_verified` true (the VM was released), and the SHA-256 of each executed notebook equals the summary's `executed_sha256`.
 
@@ -142,7 +186,9 @@ Not exercised by these runs: an accepted BYOD input (REL12), a browser `Run all`
 
 ## Current status
 
-**Candidate.** Blob `51db9a5288685` (commit `d7541b2`) passed in one pass on a fresh Colab Tesla T4 on 2026-10-17, Colab account 2 (first row of Recorded executions; every printed metric equals the account-1 run of `3283e836b0ec`). REL13: earlier-blob figures, not re-run on blob `51db9a5288685`, follow. Blob `3283e836b0ec` (commit `03ac0e7`) passed in one pass on a fresh Colab Tesla T4 on 2026-10-17 (first row of Recorded executions; Colab CLI sequential execution, not a browser Run all; forms and uploads not exercised). REL13: earlier-blob figures, not re-run on blob `3283e836b0ec`, follow. Blob `a545a73b` replaced the in-kernel install with an isolated hash-locked uv
+**Candidate (2026-11-03, REL14).** Blob `5aa192ac`, the notebook on `main` now (`main` at `4e543c5`, the lock-upgrade revision of PRs #12 and #13) passed on a hosted Colab T4 on 2026-11-03: its default path (12/12 code cells, one pass, no restart, 0 errors) and its scripted DAT20 refusal (`USE_BYOD=True;BYOD_PATH=/etc/hostname`: exactly one `Refused:` line at cell `owlv2_detection-16`, no traceback, earlier cells clean, VM released); REL14 for this blob. The remaining gates for this blob are REL12 (a hosted BYOD run with one accepted and one refused input) and REL2 (a browser `Run all` of the interactive journeys, forms and uploads). Blob `cd3e85a1` (code commit `7544f4f`, the DAT20 refusal fix), which was the notebook on `main` on 2026-10-29 and is history now (REL14), shows a refused BYOD input as exactly one `Refused: <file>: <reason>` line (previously a differently prefixed line), with no traceback, and stops Run all at that cell; genuine failures keep their traceback (NOTEBOOK_SPEC DAT19/DAT20). Its default path (2026-10-29; 12 code cells, exit 0, 0 errors) and its scripted DAT20 refusal (2026-10-29; `USE_BYOD=True;BYOD_PATH=/etc/hostname`: exactly one `Refused:` line at cell `owlv2_detection-16`, no traceback, earlier cells clean, VM released) both passed on a hosted Colab Tesla T4 (Colab CLI `colab exec -f`, not a browser `Run all`), and the hosted runs of earlier blobs, including `51db9a52`, are history for it (REL14).
+
+**History (2026-10-17): Candidate.** Blob `51db9a5288685` (commit `d7541b2`) passed in one pass on a fresh Colab Tesla T4 on 2026-10-17, Colab account 2 (first row of Recorded executions; every printed metric equals the account-1 run of `3283e836b0ec`). REL13: earlier-blob figures, not re-run on blob `51db9a5288685`, follow. Blob `3283e836b0ec` (commit `03ac0e7`) passed in one pass on a fresh Colab Tesla T4 on 2026-10-17 (first row of Recorded executions; Colab CLI sequential execution, not a browser Run all; forms and uploads not exercised). REL13: earlier-blob figures, not re-run on blob `3283e836b0ec`, follow. Blob `a545a73b` replaced the in-kernel install with an isolated hash-locked uv
 environment and carries the 2026-10-02 review fixes (OWD-*) and the 2026-10-16 review fixes (OWL-*: spec 2.5
 migration, use notice, DAT9 overlap statement, run labels, one-message BYOD refusals; text and refusal
 handling only, default-path computation unchanged). Blob `a545a73b` ran on 2026-10-08 (above); the regenerated
@@ -156,5 +202,3 @@ adapter export and fresh-base reload parity 8/8). The measured values are one se
 blood-smear sample on one runtime; they carry no dispersion estimate and are not a benchmark. Any change
 to the notebook blob returns the carrier to Candidate until a new exact-blob run is recorded. The
 historical inference rows remain regression context only.
-
-Blob `cd3e85a1` (code commit `7544f4f`, the DAT20 refusal fix) shows a refused BYOD input as exactly one `Refused: <file>: <reason>` line (previously a differently prefixed line), with no traceback, and stops Run all at that cell; genuine failures keep their traceback (NOTEBOOK_SPEC DAT19/DAT20). Its default path (2026-10-29; 12 code cells, exit 0, 0 errors) and its scripted DAT20 refusal (2026-10-29; `USE_BYOD=True;BYOD_PATH=/etc/hostname`: exactly one `Refused:` line at cell `owlv2_detection-16`, no traceback, earlier cells clean, VM released) both passed on a hosted Colab Tesla T4 (Colab CLI `colab exec -f`, not a browser `Run all`), and the hosted runs of earlier blobs, including `51db9a52`, are history for it (REL14).
